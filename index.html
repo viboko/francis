@@ -64,12 +64,15 @@
   #partsbtn { margin-left:auto; }
   #panel { width:100%; border-top:1px solid var(--line); padding-top:8px; max-height:calc(100vh - 70px); overflow-y:auto; }
   #panel[hidden] { display:none; }
-  .parts { display:grid; grid-template-columns:auto auto auto; gap:6px 12px; align-items:center; justify-content:start; }
+  .parts { display:grid; grid-template-columns:auto auto auto auto; gap:6px 12px; align-items:center; justify-content:start; }
   .parts .head { color:var(--muted); font-size:.78rem; }
   .seg { display:inline-flex; border:1px solid var(--line); border-radius:999px; overflow:hidden; }
   .seg button { border:0; border-radius:0; background:#fff; color:var(--muted); padding:5px 11px; font-size:.82rem; }
   .seg button + button { border-left:1px solid var(--line); }
   .seg button.on { background:var(--accent); color:#fff; }
+  .seg.ghost { opacity:.35; }
+  .solo { padding:5px 11px; font-size:.82rem; background:#fff; color:var(--muted); border:1px solid var(--line); }
+  .solo.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   .settings { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin-top:10px; }
   .startlabel { color:var(--muted); }
   #playmsg:empty { display:none; }
@@ -358,7 +361,7 @@ function beginPlayback(ac, off, withCountIn) {
   song.voices.forEach(v => {
     if (!gains[v.part]) {
       const g = ac.createGain();
-      g.gain.value = LEVELS[P.mix[v.part].level];
+      g.gain.value = LEVELS[soundOf(v.part)];
       g.connect(master);
       gains[v.part] = g;
     }
@@ -405,8 +408,9 @@ function startTiming() {
   if (!active) return;
   active.next = 0;
   if (!P.visual) { active.events = []; return; }
-  const timing = new ABCJS.TimingCallbacks(P.visual, { qpm: 60 });  // 60: one crotchet = 1000 ms
-  active.events = timing.noteTimings.filter(e => e.type === 'event' && e.elements).map(e => ({ q: e.milliseconds / 500, elements: e.elements }));
+  // At qpm 60 one beat is 1000 ms, but abcjs's beat depends on the opening meter (a dotted crotchet in 6/8).
+  const timing = new ABCJS.TimingCallbacks(P.visual, { qpm: 60 }), quaversPerMs = P.visual.getBeatLength() * 8 / 1000;
+  active.events = timing.noteTimings.filter(e => e.type === 'event' && e.elements).map(e => ({ q: e.milliseconds * quaversPerMs, elements: e.elements }));
 }
 function follow() {
   if (active.ac.currentTime < active.tStart) return;
@@ -565,29 +569,31 @@ document.addEventListener('visibilitychange', () => {
   if (ctx && ctx.state !== 'running') dropContext();
 });
 
-/* ---------- the mix: each part's level and whether it's on the score, remembered per device ---------- */
+/* ---------- the mix and playback settings, remembered per song on this device ---------- */
 function partsOf(song) {
   const seen = new Map();
   song.voices.forEach(v => { if (!seen.has(v.part)) seen.set(v.part, v.name); });
   return [...seen].map(([id, name]) => ({ id, name }));
 }
+function loadSettings(song) {
+  try { return JSON.parse(store.get(`song:${song.slug}`)) || {}; } catch (e) { return {}; }
+}
+function saveSettings(change) {
+  store.set(`song:${P.song.slug}`, JSON.stringify(Object.assign(loadSettings(P.song), change)));
+}
 function loadMix(song) {
-  let saved = {};
-  try { saved = JSON.parse(store.get('mix') || '{}'); } catch (e) {}
-  const mix = {};
+  const saved = loadSettings(song).parts || {}, mix = {};
   partsOf(song).forEach(({ id }) => {
     const organ = id === 'organ';  // by default it plays quietly; every part is on the score
     const s = saved[id] || {};
     mix[id] = { level: LEVELS[s.level] !== undefined ? s.level : organ ? 'quiet' : 'full', show: s.show !== undefined ? !!s.show : true };
   });
-  if (!partsOf(song).some(({ id }) => mix[id].show)) partsOf(song).forEach(({ id }) => { mix[id].show = true; });  // e.g. bass-only, but this piece has no bass
+  if (!partsOf(song).some(({ id }) => mix[id].show)) partsOf(song).forEach(({ id }) => { mix[id].show = true; });  // never open on an empty score
   return mix;
 }
-function saveMix() {
-  let saved = {};
-  try { saved = JSON.parse(store.get('mix') || '{}'); } catch (e) {}
-  store.set('mix', JSON.stringify(Object.assign(saved, P.mix)));
-}
+const saveMix = () => saveSettings({ parts: P.mix });
+// What a part actually plays at: solo overrides the saved levels without changing them.
+const soundOf = part => P.solo ? (part === P.solo ? 'full' : 'off') : P.mix[part].level;
 const shownFrom = mix => new Set(Object.keys(mix).filter(id => mix[id].show));
 
 /* ---------- views ---------- */
@@ -683,12 +689,13 @@ async function showSong(meta, prog) {
       </div>
       <div id="panel" hidden>
         <div class="parts">
-          <span class="head">Part</span><span class="head">Sound</span><span class="head">Show</span>
+          <span class="head">Part</span><span class="head">Sound</span><span class="head">Solo</span><span class="head">Show</span>
           ${partsOf(song).map(p => `
             <span>${esc(p.name)}</span>
             <span class="seg" role="group" aria-label="${esc(p.name)} sound">
               ${['off', 'quiet', 'full'].map(l => `<button type="button" data-part="${p.id}" data-level="${l}">${l[0].toUpperCase() + l.slice(1)}</button>`).join('')}
             </span>
+            <button type="button" class="solo" data-solo="${p.id}" aria-pressed="false" aria-label="Solo ${esc(p.name)}">Solo</button>
             <input type="checkbox" data-show="${p.id}" aria-label="Show ${esc(p.name)} on the score">`).join('')}
         </div>
         <div class="settings">
@@ -701,8 +708,8 @@ async function showSong(meta, prog) {
     <div class="score"></div>
     <p class="foot">Tap a bar to start from there.</p>
     ${nav.bottom}`;
-  const mix = loadMix(song);
-  P = { song, root: app.querySelector('.score'), mix, shown: shownFrom(mix), startBar: 0, layout: [], followed: null };
+  const mix = loadMix(song), settings = loadSettings(song);
+  P = { song, solo: null, root: app.querySelector('.score'), mix, shown: shownFrom(mix), startBar: 0, layout: [], followed: null };
   renderScore();
 
   document.getElementById('play').addEventListener('click', () => {
@@ -714,7 +721,17 @@ async function showSong(meta, prog) {
     const bar = e.target.dataset && e.target.dataset.bar;
     if (bar !== undefined) selectBar(+bar);
   });
-  const showLevels = () => app.querySelectorAll('.seg button').forEach(b => b.classList.toggle('on', P.mix[b.dataset.part].level === b.dataset.level));
+  const showLevels = () => {
+    app.querySelectorAll('.seg button').forEach(b => {
+      b.classList.toggle('on', P.mix[b.dataset.part].level === b.dataset.level);
+      b.disabled = !!P.solo;
+    });
+    app.querySelectorAll('.seg').forEach(g => g.classList.toggle('ghost', !!P.solo));
+    app.querySelectorAll('.solo').forEach(b => {
+      b.classList.toggle('on', b.dataset.solo === P.solo);
+      b.setAttribute('aria-pressed', String(b.dataset.solo === P.solo));
+    });
+  };
   showLevels();
   app.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
     const { part, level } = b.dataset;
@@ -722,6 +739,12 @@ async function showSong(meta, prog) {
     saveMix();
     showLevels();
     if (active) active.gains[part].gain.setTargetAtTime(LEVELS[level], active.ac.currentTime, 0.01);
+  }));
+  // Solo lasts until it's turned off or the song is left; it isn't saved.
+  app.querySelectorAll('.solo').forEach(b => b.addEventListener('click', () => {
+    P.solo = P.solo === b.dataset.solo ? null : b.dataset.solo;
+    showLevels();
+    if (active) Object.keys(active.gains).forEach(part => active.gains[part].gain.setTargetAtTime(LEVELS[soundOf(part)], active.ac.currentTime, 0.01));
   }));
   app.querySelectorAll('input[data-show]').forEach(box => {
     box.checked = P.mix[box.dataset.show].show;
@@ -742,14 +765,22 @@ async function showSong(meta, prog) {
   setPanel(false);  // every song opens with the panel closed
   partsBtn.addEventListener('click', () => setPanel(panel.hidden));
   const expressive = document.getElementById('expressive');
-  expressive.checked = store.get('expressive') !== 'off';
+  expressive.checked = settings.expressive !== false;
   expressive.addEventListener('change', () => {
-    store.set('expressive', expressive.checked ? 'on' : 'off');
+    saveSettings({ expressive: expressive.checked });
     if (active) startAt(position(), false);
   });
+  const countin = document.getElementById('countin');
+  countin.checked = !!settings.countin;
+  countin.addEventListener('change', () => saveSettings({ countin: countin.checked }));
   const tempo = document.getElementById('tempo');
+  if (settings.tempo) tempo.value = settings.tempo;
+  document.getElementById('tval').textContent = tempo.value;
   tempo.addEventListener('input', () => { document.getElementById('tval').textContent = tempo.value; });
-  tempo.addEventListener('change', () => { if (active) startAt(position(), false); });
+  tempo.addEventListener('change', () => {
+    saveSettings({ tempo: +tempo.value });
+    if (active) startAt(position(), false);
+  });
 }
 
 function route() {
