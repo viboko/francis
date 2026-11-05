@@ -739,12 +739,8 @@ async function showSong(meta, prog) {
     partsBtn.setAttribute('aria-expanded', String(open));
     partsBtn.textContent = open ? 'Parts ▴' : 'Parts ▾';
   };
-  const savedPanel = store.get('panel');
-  setPanel(savedPanel ? savedPanel === 'open' : !narrow());
-  partsBtn.addEventListener('click', () => {
-    setPanel(panel.hidden);
-    store.set('panel', panel.hidden ? 'closed' : 'open');
-  });
+  setPanel(false);  // every song opens with the panel closed
+  partsBtn.addEventListener('click', () => setPanel(panel.hidden));
   const expressive = document.getElementById('expressive');
   expressive.checked = store.get('expressive') !== 'off';
   expressive.addEventListener('change', () => {
