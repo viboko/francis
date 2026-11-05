@@ -72,6 +72,7 @@
   .seg button.on { background:var(--accent); color:#fff; }
   .seg.ghost { opacity:.35; }
   .solo { padding:5px 11px; font-size:.82rem; background:#fff; color:var(--muted); border:1px solid var(--line); }
+  .settings button { padding:3px 10px; font-size:.82rem; }
   .solo.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   .settings { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin-top:10px; }
   .startlabel { color:var(--muted); }
@@ -291,6 +292,7 @@ function position() {  // in quavers from the top of the piece
   return active.clock.inverse(active.clock.at(active.off) + elapsed);
 }
 const LEVELS = { off: 0, quiet: 0.3, full: 1 };
+const TRANSPOSE_MAX = 6;  // semitones either way
 
 // Maps score position (quavers) to time, in quavers at the slider's tempo. With the tempo
 // marks off it's the identity; with them on, it's a table summed over small steps.
@@ -384,7 +386,7 @@ function beginPlayback(ac, off, withCountIn) {
       if (at > horizon) break;
       next++;
       const dur = timeAt(n.s + n.d - 0.02) - at;
-      (n.organ ? organTone : tone)(ac, n.g, n.p, at, dur, n.gain).forEach(o => {
+      (n.organ ? organTone : tone)(ac, n.g, n.p + P.transpose, at, dur, n.gain).forEach(o => {
         nodes.add(o);
         o.onended = () => nodes.delete(o);
       });
@@ -569,7 +571,7 @@ document.addEventListener('visibilitychange', () => {
   if (ctx && ctx.state !== 'running') dropContext();
 });
 
-/* ---------- the mix and playback settings, remembered per song on this device ---------- */
+/* ---------- each part's sound and show settings and the transposition, remembered per song on this device ---------- */
 function partsOf(song) {
   const seen = new Map();
   song.voices.forEach(v => { if (!seen.has(v.part)) seen.set(v.part, v.name); });
@@ -677,7 +679,7 @@ async function showSong(meta, prog) {
   app.innerHTML = `
     ${nav.top}
     <h1>${esc(song.title)}</h1>
-    <p class="sub">${esc(byline(song))} · ${keyName(song.key)} · ♩ = ${song.tempo}</p>
+    <p class="sub">${esc(byline(song))} · ${keyName(song.key)} · ♩ = ${song.tempo}<span id="transposed"></span></p>
     ${song.note ? `<p class="note">${esc(song.note)}</p>` : ''}
     <div class="controls">
       <div class="topbar">
@@ -700,8 +702,14 @@ async function showSong(meta, prog) {
         </div>
         <div class="settings">
           <label>Tempo <input id="tempo" type="range" min="30" max="${maxT}" value="${song.tempo}"> <span id="tval">${song.tempo}</span></label>
+          <button id="tempo-reset" class="quiet" type="button" disabled>Reset</button>
           <label><input id="countin" type="checkbox"> Count-in</label>
           <label ${song.tempo_marks.length ? '' : 'hidden'}><input id="expressive" type="checkbox"> Rit. &amp; pauses</label>
+          <span class="transpose" role="group" aria-label="Transpose in semitones">Transpose
+            <button id="tr-down" class="quiet" type="button" aria-label="Down a semitone">−</button>
+            <span id="trval" aria-live="polite"></span>
+            <button id="tr-up" class="quiet" type="button" aria-label="Up a semitone">+</button>
+          </span>
         </div>
       </div>
     </div>
@@ -709,7 +717,8 @@ async function showSong(meta, prog) {
     <p class="foot">Tap a bar to start from there.</p>
     ${nav.bottom}`;
   const mix = loadMix(song), settings = loadSettings(song);
-  P = { song, solo: null, root: app.querySelector('.score'), mix, shown: shownFrom(mix), startBar: 0, layout: [], followed: null };
+  const savedTranspose = Number.isInteger(settings.transpose) ? settings.transpose : 0;
+  P = { song, solo: null, transpose: Math.max(-TRANSPOSE_MAX, Math.min(TRANSPOSE_MAX, savedTranspose)), root: app.querySelector('.score'), mix, shown: shownFrom(mix), startBar: 0, layout: [], followed: null };
   renderScore();
 
   document.getElementById('play').addEventListener('click', () => {
@@ -765,22 +774,38 @@ async function showSong(meta, prog) {
   setPanel(false);  // every song opens with the panel closed
   partsBtn.addEventListener('click', () => setPanel(panel.hidden));
   const expressive = document.getElementById('expressive');
-  expressive.checked = settings.expressive !== false;
+  expressive.checked = true;  // Rit. & pauses and count-in start at their defaults each time; they aren't saved
   expressive.addEventListener('change', () => {
-    saveSettings({ expressive: expressive.checked });
     if (active) startAt(position(), false);
   });
-  const countin = document.getElementById('countin');
-  countin.checked = !!settings.countin;
-  countin.addEventListener('change', () => saveSettings({ countin: countin.checked }));
-  const tempo = document.getElementById('tempo');
-  if (settings.tempo) tempo.value = settings.tempo;
-  document.getElementById('tval').textContent = tempo.value;
-  tempo.addEventListener('input', () => { document.getElementById('tval').textContent = tempo.value; });
-  tempo.addEventListener('change', () => {
-    saveSettings({ tempo: +tempo.value });
+  // The tempo always starts at the song's own; it isn't saved.
+  const tempo = document.getElementById('tempo'), tempoReset = document.getElementById('tempo-reset');
+  const showTempo = () => {
+    document.getElementById('tval').textContent = tempo.value;
+    tempoReset.disabled = +tempo.value === song.tempo;
+  };
+  tempo.addEventListener('input', showTempo);
+  tempo.addEventListener('change', () => { if (active) startAt(position(), false); });
+  tempoReset.addEventListener('click', () => {
+    tempo.value = song.tempo;
+    showTempo();
     if (active) startAt(position(), false);
   });
+  // Transposing changes the sound of every part; the score stays as written.
+  const signed = n => (n > 0 ? '+' : '') + n;
+  const showTranspose = () => {
+    document.getElementById('trval').textContent = signed(P.transpose);
+    document.getElementById('tr-down').disabled = P.transpose <= -TRANSPOSE_MAX;
+    document.getElementById('tr-up').disabled = P.transpose >= TRANSPOSE_MAX;
+    document.getElementById('transposed').textContent = P.transpose ? ` · sounds ${signed(P.transpose)} semitone${Math.abs(P.transpose) === 1 ? '' : 's'}` : '';
+  };
+  showTranspose();
+  [['tr-down', -1], ['tr-up', 1]].forEach(([id, step]) => document.getElementById(id).addEventListener('click', () => {
+    P.transpose += step;
+    saveSettings({ transpose: P.transpose });
+    showTranspose();
+    if (active) startAt(position(), false);
+  }));
 }
 
 function route() {
