@@ -62,6 +62,9 @@
   #play { min-width:92px; }
   .topbar { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; width:100%; }
   #partsbtn { margin-left:auto; }
+  .controls { cursor:pointer; }
+  .controls button, .controls input, .controls label, .controls .seg, .controls .transpose { cursor:auto; }
+  .controls button:not(:disabled), .controls input[type=checkbox] { cursor:pointer; }
   #panel { width:100%; border-top:1px solid var(--line); padding-top:8px; max-height:calc(100vh - 70px); overflow-y:auto; }
   #panel[hidden] { display:none; }
   .parts { display:grid; grid-template-columns:auto auto auto auto; gap:6px 12px; align-items:center; justify-content:start; }
@@ -773,6 +776,15 @@ async function showSong(meta, prog) {
   };
   setPanel(false);  // every song opens with the panel closed
   partsBtn.addEventListener('click', () => setPanel(panel.hidden));
+  // The rest of the card toggles the panel too, except its controls. A slider drag that ends
+  // off the slider fires its click on the card, so the press has to have started outside a control too.
+  const controls = app.querySelector('.controls');
+  const isControl = el => el.closest('button, input, label, a, .seg, .transpose');
+  let pressedControl = false;
+  controls.addEventListener('pointerdown', e => { pressedControl = !!isControl(e.target); });
+  controls.addEventListener('click', e => {
+    if (!pressedControl && !isControl(e.target)) setPanel(panel.hidden);
+  });
   const expressive = document.getElementById('expressive');
   expressive.checked = true;  // Rit. & pauses and count-in start at their defaults each time; they aren't saved
   expressive.addEventListener('change', () => {
