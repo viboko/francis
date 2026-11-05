@@ -8,13 +8,13 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#9a3b1e">
-<meta name="apple-mobile-web-app-title" content="Choir practice">
+<meta name="apple-mobile-web-app-title" content="St. Francis">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="robots" content="noindex, nofollow">
 
-<title>Choir practice</title>
+<title>St. Francis de Sales</title>
 <style>
   :root { --ink:#1d1b18; --muted:#6b665e; --paper:#fbfaf6; --line:#e4e0d6; --accent:#9a3b1e; --hl:#d2551f; --sans:system-ui, sans-serif; }
   * { box-sizing:border-box; }
@@ -155,11 +155,11 @@ async function loadSong(meta) {
 }
 
 function showLogin(message) {
-  document.title = 'Choir practice';
+  document.title = 'St. Francis de Sales';
   app.innerHTML = `
     <form class="login">
       <img src="icons/apple-touch-icon.png" alt="">
-      <h1>Choir practice</h1>
+      <h1>St. Francis de Sales</h1>
       <input type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" autofocus>
       <button type="submit">Open</button>
       <p class="err">${esc(message || '')}</p>
@@ -658,10 +658,10 @@ function wireSearch() {
   return apply;
 }
 function showChoir() {
-  document.title = 'Choir practice';
+  document.title = 'St. Francis de Sales';
   const songs = catalogue.songs.filter(s => !s.hymn);
   app.innerHTML = `
-    <h1>Choir practice</h1>
+    <h1>St. Francis de Sales</h1>
     ${tabs('choir')}
     ${searchBox(songs, 'Search songs')}
     <ul class="songs">${songs.map(s => songRow(s)).join('')}</ul>`;
@@ -669,10 +669,10 @@ function showChoir() {
 }
 let hymnSort = 'number';  // kept while the app is open, so it's still there coming back from a hymn
 function showHymns() {
-  document.title = 'Hymns – Choir practice';
+  document.title = 'Hymns – St. Francis de Sales';
   const hymns = catalogue.songs.filter(s => s.hymn);  // the catalogue is already in name order
   app.innerHTML = `
-    <h1>Choir practice</h1>
+    <h1>St. Francis de Sales</h1>
     ${tabs('hymns')}
     ${searchBox(hymns, 'Search by number or name')}
     <div class="sortbar">
@@ -696,10 +696,10 @@ function showHymns() {
   draw();
 }
 function showProgrammes() {
-  document.title = 'Programmes – Choir practice';
+  document.title = 'Programmes – St. Francis de Sales';
   const list = catalogue.programmes;
   app.innerHTML = `
-    <h1>Choir practice</h1>
+    <h1>St. Francis de Sales</h1>
     ${tabs('prog')}
     ${list.length ? `<ul class="songs">${list.map(p => `
       <li><a href="#programme-${p.slug}"><div>
@@ -708,7 +708,7 @@ function showProgrammes() {
       </div></a></li>`).join('')}</ul>` : '<p class="sub">No programmes yet.</p>'}`;
 }
 function showProgramme(p) {
-  document.title = p.title + ' – Choir practice';
+  document.title = p.title + ' – St. Francis de Sales';
   const songs = p.songs.map(slug => catalogue.songs.find(s => s.slug === slug));
   app.innerHTML = `
     <div class="crumb"><a href="#programmes">← Programmes</a></div>
@@ -733,7 +733,7 @@ function songNav(meta, prog) {
 
 async function showSong(meta, prog) {
   const token = routeToken;
-  document.title = meta.title + ' – Choir practice';
+  document.title = meta.title + ' – St. Francis de Sales';
   const nav = songNav(meta, prog);
   app.innerHTML = `${nav.top}<h1>${esc(meta.title)}</h1><p class="sub">Loading…</p>`;
   let song;
