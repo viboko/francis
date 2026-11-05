@@ -62,14 +62,21 @@
   #play { min-width:92px; }
   .topbar { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; width:100%; }
   #partsbtn { margin-left:auto; }
+  .controls { cursor:pointer; }
+  .controls button, .controls input, .controls label, .controls .seg, .controls .transpose { cursor:auto; }
+  .controls button:not(:disabled), .controls input[type=checkbox] { cursor:pointer; }
   #panel { width:100%; border-top:1px solid var(--line); padding-top:8px; max-height:calc(100vh - 70px); overflow-y:auto; }
   #panel[hidden] { display:none; }
-  .parts { display:grid; grid-template-columns:auto auto auto; gap:6px 12px; align-items:center; justify-content:start; }
+  .parts { display:grid; grid-template-columns:auto auto auto auto; gap:6px 12px; align-items:center; justify-content:start; }
   .parts .head { color:var(--muted); font-size:.78rem; }
   .seg { display:inline-flex; border:1px solid var(--line); border-radius:999px; overflow:hidden; }
   .seg button { border:0; border-radius:0; background:#fff; color:var(--muted); padding:5px 11px; font-size:.82rem; }
   .seg button + button { border-left:1px solid var(--line); }
   .seg button.on { background:var(--accent); color:#fff; }
+  .seg.ghost { opacity:.35; }
+  .solo { padding:5px 11px; font-size:.82rem; background:#fff; color:var(--muted); border:1px solid var(--line); }
+  .settings button { padding:3px 10px; font-size:.82rem; }
+  .solo.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   .settings { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin-top:10px; }
   .startlabel { color:var(--muted); }
   #playmsg:empty { display:none; }
@@ -288,6 +295,7 @@ function position() {  // in quavers from the top of the piece
   return active.clock.inverse(active.clock.at(active.off) + elapsed);
 }
 const LEVELS = { off: 0, quiet: 0.3, full: 1 };
+const TRANSPOSE_MAX = 6;  // semitones either way
 
 // Maps score position (quavers) to time, in quavers at the slider's tempo. With the tempo
 // marks off it's the identity; with them on, it's a table summed over small steps.
@@ -358,7 +366,7 @@ function beginPlayback(ac, off, withCountIn) {
   song.voices.forEach(v => {
     if (!gains[v.part]) {
       const g = ac.createGain();
-      g.gain.value = LEVELS[P.mix[v.part].level];
+      g.gain.value = LEVELS[soundOf(v.part)];
       g.connect(master);
       gains[v.part] = g;
     }
@@ -381,7 +389,7 @@ function beginPlayback(ac, off, withCountIn) {
       if (at > horizon) break;
       next++;
       const dur = timeAt(n.s + n.d - 0.02) - at;
-      (n.organ ? organTone : tone)(ac, n.g, n.p, at, dur, n.gain).forEach(o => {
+      (n.organ ? organTone : tone)(ac, n.g, n.p + P.transpose, at, dur, n.gain).forEach(o => {
         nodes.add(o);
         o.onended = () => nodes.delete(o);
       });
@@ -405,8 +413,9 @@ function startTiming() {
   if (!active) return;
   active.next = 0;
   if (!P.visual) { active.events = []; return; }
-  const timing = new ABCJS.TimingCallbacks(P.visual, { qpm: 60 });  // 60: one crotchet = 1000 ms
-  active.events = timing.noteTimings.filter(e => e.type === 'event' && e.elements).map(e => ({ q: e.milliseconds / 500, elements: e.elements }));
+  // At qpm 60 one beat is 1000 ms, but abcjs's beat depends on the opening meter (a dotted crotchet in 6/8).
+  const timing = new ABCJS.TimingCallbacks(P.visual, { qpm: 60 }), quaversPerMs = P.visual.getBeatLength() * 8 / 1000;
+  active.events = timing.noteTimings.filter(e => e.type === 'event' && e.elements).map(e => ({ q: e.milliseconds * quaversPerMs, elements: e.elements }));
 }
 function follow() {
   if (active.ac.currentTime < active.tStart) return;
@@ -565,29 +574,31 @@ document.addEventListener('visibilitychange', () => {
   if (ctx && ctx.state !== 'running') dropContext();
 });
 
-/* ---------- the mix: each part's level and whether it's on the score, remembered per device ---------- */
+/* ---------- each part's sound and show settings and the transposition, remembered per song on this device ---------- */
 function partsOf(song) {
   const seen = new Map();
   song.voices.forEach(v => { if (!seen.has(v.part)) seen.set(v.part, v.name); });
   return [...seen].map(([id, name]) => ({ id, name }));
 }
+function loadSettings(song) {
+  try { return JSON.parse(store.get(`song:${song.slug}`)) || {}; } catch (e) { return {}; }
+}
+function saveSettings(change) {
+  store.set(`song:${P.song.slug}`, JSON.stringify(Object.assign(loadSettings(P.song), change)));
+}
 function loadMix(song) {
-  let saved = {};
-  try { saved = JSON.parse(store.get('mix') || '{}'); } catch (e) {}
-  const mix = {};
+  const saved = loadSettings(song).parts || {}, mix = {};
   partsOf(song).forEach(({ id }) => {
     const organ = id === 'organ';  // by default it plays quietly; every part is on the score
     const s = saved[id] || {};
     mix[id] = { level: LEVELS[s.level] !== undefined ? s.level : organ ? 'quiet' : 'full', show: s.show !== undefined ? !!s.show : true };
   });
-  if (!partsOf(song).some(({ id }) => mix[id].show)) partsOf(song).forEach(({ id }) => { mix[id].show = true; });  // e.g. bass-only, but this piece has no bass
+  if (!partsOf(song).some(({ id }) => mix[id].show)) partsOf(song).forEach(({ id }) => { mix[id].show = true; });  // never open on an empty score
   return mix;
 }
-function saveMix() {
-  let saved = {};
-  try { saved = JSON.parse(store.get('mix') || '{}'); } catch (e) {}
-  store.set('mix', JSON.stringify(Object.assign(saved, P.mix)));
-}
+const saveMix = () => saveSettings({ parts: P.mix });
+// What a part actually plays at: solo overrides the saved levels without changing them.
+const soundOf = part => P.solo ? (part === P.solo ? 'full' : 'off') : P.mix[part].level;
 const shownFrom = mix => new Set(Object.keys(mix).filter(id => mix[id].show));
 
 /* ---------- views ---------- */
@@ -671,7 +682,7 @@ async function showSong(meta, prog) {
   app.innerHTML = `
     ${nav.top}
     <h1>${esc(song.title)}</h1>
-    <p class="sub">${esc(byline(song))} · ${keyName(song.key)} · ♩ = ${song.tempo}</p>
+    <p class="sub">${esc(byline(song))} · ${keyName(song.key)} · ♩ = ${song.tempo}<span id="transposed"></span></p>
     ${song.note ? `<p class="note">${esc(song.note)}</p>` : ''}
     <div class="controls">
       <div class="topbar">
@@ -683,26 +694,34 @@ async function showSong(meta, prog) {
       </div>
       <div id="panel" hidden>
         <div class="parts">
-          <span class="head">Part</span><span class="head">Sound</span><span class="head">Show</span>
+          <span class="head">Part</span><span class="head">Sound</span><span class="head">Solo</span><span class="head">Show</span>
           ${partsOf(song).map(p => `
             <span>${esc(p.name)}</span>
             <span class="seg" role="group" aria-label="${esc(p.name)} sound">
               ${['off', 'quiet', 'full'].map(l => `<button type="button" data-part="${p.id}" data-level="${l}">${l[0].toUpperCase() + l.slice(1)}</button>`).join('')}
             </span>
+            <button type="button" class="solo" data-solo="${p.id}" aria-pressed="false" aria-label="Solo ${esc(p.name)}">Solo</button>
             <input type="checkbox" data-show="${p.id}" aria-label="Show ${esc(p.name)} on the score">`).join('')}
         </div>
         <div class="settings">
           <label>Tempo <input id="tempo" type="range" min="30" max="${maxT}" value="${song.tempo}"> <span id="tval">${song.tempo}</span></label>
+          <button id="tempo-reset" class="quiet" type="button" disabled>Reset</button>
           <label><input id="countin" type="checkbox"> Count-in</label>
           <label ${song.tempo_marks.length ? '' : 'hidden'}><input id="expressive" type="checkbox"> Rit. &amp; pauses</label>
+          <span class="transpose" role="group" aria-label="Transpose in semitones">Transpose
+            <button id="tr-down" class="quiet" type="button" aria-label="Down a semitone">−</button>
+            <span id="trval" aria-live="polite"></span>
+            <button id="tr-up" class="quiet" type="button" aria-label="Up a semitone">+</button>
+          </span>
         </div>
       </div>
     </div>
     <div class="score"></div>
     <p class="foot">Tap a bar to start from there.</p>
     ${nav.bottom}`;
-  const mix = loadMix(song);
-  P = { song, root: app.querySelector('.score'), mix, shown: shownFrom(mix), startBar: 0, layout: [], followed: null };
+  const mix = loadMix(song), settings = loadSettings(song);
+  const savedTranspose = Number.isInteger(settings.transpose) ? settings.transpose : 0;
+  P = { song, solo: null, transpose: Math.max(-TRANSPOSE_MAX, Math.min(TRANSPOSE_MAX, savedTranspose)), root: app.querySelector('.score'), mix, shown: shownFrom(mix), startBar: 0, layout: [], followed: null };
   renderScore();
 
   document.getElementById('play').addEventListener('click', () => {
@@ -714,7 +733,17 @@ async function showSong(meta, prog) {
     const bar = e.target.dataset && e.target.dataset.bar;
     if (bar !== undefined) selectBar(+bar);
   });
-  const showLevels = () => app.querySelectorAll('.seg button').forEach(b => b.classList.toggle('on', P.mix[b.dataset.part].level === b.dataset.level));
+  const showLevels = () => {
+    app.querySelectorAll('.seg button').forEach(b => {
+      b.classList.toggle('on', P.mix[b.dataset.part].level === b.dataset.level);
+      b.disabled = !!P.solo;
+    });
+    app.querySelectorAll('.seg').forEach(g => g.classList.toggle('ghost', !!P.solo));
+    app.querySelectorAll('.solo').forEach(b => {
+      b.classList.toggle('on', b.dataset.solo === P.solo);
+      b.setAttribute('aria-pressed', String(b.dataset.solo === P.solo));
+    });
+  };
   showLevels();
   app.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
     const { part, level } = b.dataset;
@@ -722,6 +751,12 @@ async function showSong(meta, prog) {
     saveMix();
     showLevels();
     if (active) active.gains[part].gain.setTargetAtTime(LEVELS[level], active.ac.currentTime, 0.01);
+  }));
+  // Solo lasts until it's turned off or the song is left; it isn't saved.
+  app.querySelectorAll('.solo').forEach(b => b.addEventListener('click', () => {
+    P.solo = P.solo === b.dataset.solo ? null : b.dataset.solo;
+    showLevels();
+    if (active) Object.keys(active.gains).forEach(part => active.gains[part].gain.setTargetAtTime(LEVELS[soundOf(part)], active.ac.currentTime, 0.01));
   }));
   app.querySelectorAll('input[data-show]').forEach(box => {
     box.checked = P.mix[box.dataset.show].show;
@@ -739,21 +774,50 @@ async function showSong(meta, prog) {
     partsBtn.setAttribute('aria-expanded', String(open));
     partsBtn.textContent = open ? 'Parts ▴' : 'Parts ▾';
   };
-  const savedPanel = store.get('panel');
-  setPanel(savedPanel ? savedPanel === 'open' : !narrow());
-  partsBtn.addEventListener('click', () => {
-    setPanel(panel.hidden);
-    store.set('panel', panel.hidden ? 'closed' : 'open');
+  setPanel(false);  // every song opens with the panel closed
+  partsBtn.addEventListener('click', () => setPanel(panel.hidden));
+  // The rest of the card toggles the panel too, except its controls. A slider drag that ends
+  // off the slider fires its click on the card, so the press has to have started outside a control too.
+  const controls = app.querySelector('.controls');
+  const isControl = el => el.closest('button, input, label, a, .seg, .transpose');
+  let pressedControl = false;
+  controls.addEventListener('pointerdown', e => { pressedControl = !!isControl(e.target); });
+  controls.addEventListener('click', e => {
+    if (!pressedControl && !isControl(e.target)) setPanel(panel.hidden);
   });
   const expressive = document.getElementById('expressive');
-  expressive.checked = store.get('expressive') !== 'off';
+  expressive.checked = true;  // Rit. & pauses and count-in start at their defaults each time; they aren't saved
   expressive.addEventListener('change', () => {
-    store.set('expressive', expressive.checked ? 'on' : 'off');
     if (active) startAt(position(), false);
   });
-  const tempo = document.getElementById('tempo');
-  tempo.addEventListener('input', () => { document.getElementById('tval').textContent = tempo.value; });
+  // The tempo always starts at the song's own; it isn't saved.
+  const tempo = document.getElementById('tempo'), tempoReset = document.getElementById('tempo-reset');
+  const showTempo = () => {
+    document.getElementById('tval').textContent = tempo.value;
+    tempoReset.disabled = +tempo.value === song.tempo;
+  };
+  tempo.addEventListener('input', showTempo);
   tempo.addEventListener('change', () => { if (active) startAt(position(), false); });
+  tempoReset.addEventListener('click', () => {
+    tempo.value = song.tempo;
+    showTempo();
+    if (active) startAt(position(), false);
+  });
+  // Transposing changes the sound of every part; the score stays as written.
+  const signed = n => (n > 0 ? '+' : '') + n;
+  const showTranspose = () => {
+    document.getElementById('trval').textContent = signed(P.transpose);
+    document.getElementById('tr-down').disabled = P.transpose <= -TRANSPOSE_MAX;
+    document.getElementById('tr-up').disabled = P.transpose >= TRANSPOSE_MAX;
+    document.getElementById('transposed').textContent = P.transpose ? ` · sounds ${signed(P.transpose)} semitone${Math.abs(P.transpose) === 1 ? '' : 's'}` : '';
+  };
+  showTranspose();
+  [['tr-down', -1], ['tr-up', 1]].forEach(([id, step]) => document.getElementById(id).addEventListener('click', () => {
+    P.transpose += step;
+    saveSettings({ transpose: P.transpose });
+    showTranspose();
+    if (active) startAt(position(), false);
+  }));
 }
 
 function route() {
