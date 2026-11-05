@@ -33,7 +33,7 @@
   .login button { width:100%; }
 
   /* lists */
-  nav.tabs { display:flex; gap:20px; font-family:var(--sans); font-size:.95rem; border-bottom:1px solid var(--line); margin-bottom:14px; }
+  nav.tabs { display:flex; gap:clamp(10px, 3.6vw, 20px); font-family:var(--sans); font-size:.95rem; border-bottom:1px solid var(--line); margin-bottom:14px; }
   nav.tabs a { padding:8px 2px; text-decoration:none; color:var(--muted); border-bottom:2px solid transparent; margin-bottom:-1px; }
   nav.tabs a.on { color:var(--ink); border-color:var(--accent); }
   .search { width:100%; font:inherit; font-family:var(--sans); padding:9px 12px; border:1px solid var(--line); border-radius:8px; background:#fff; margin-bottom:6px; }
@@ -662,11 +662,13 @@ const tabs = on => `
   <nav class="tabs">
     <a href="#" class="${on === 'choir' ? 'on' : ''}">Choir</a>
     <a href="#hymns" class="${on === 'hymns' ? 'on' : ''}">Hymns</a>
+    <a href="#carols" class="${on === 'carols' ? 'on' : ''}">Carols</a>
     <a href="#psalms" class="${on === 'psalms' ? 'on' : ''}">Psalms</a>
     <a href="#programmes" class="${on === 'prog' ? 'on' : ''}">Programmes</a>
   </nav>`;
-const hymnLabel = s => s.hymn ? `Hymn ${s.hymn} · ` : s.number ? `No. ${s.number} · ` : '';
-const songQuery = s => esc([s.title, s.composer, s.words, s.hymn, s.number, s.ref, s.response_words].filter(Boolean).join(' ').toLowerCase());
+const carolNo = s => `C${s.carol}`;
+const hymnLabel = s => s.hymn ? `Hymn ${s.hymn} · ` : s.carol ? `Carol ${carolNo(s)} · ` : s.number ? `No. ${s.number} · ` : '';
+const songQuery = s => esc([s.title, s.composer, s.words, s.hymn, s.carol && carolNo(s), s.number, s.ref, s.response_words].filter(Boolean).join(' ').toLowerCase());
 const songMeta = s => s.kind === 'psalm' ? 'Psalm · ' + hymnLabel(s) + s.response_words : hymnLabel(s) + byline(s);
 const songRow = (s, prog, part) => `
   <li data-q="${songQuery(s)}"><a href="#song-${s.slug}${prog ? '/' + prog.slug : ''}">
@@ -675,6 +677,11 @@ const songRow = (s, prog, part) => `
 const hymnRow = s => `
   <li data-q="${songQuery(s)}"><a href="#song-${s.slug}">
     <span class="no">${s.hymn}</span>
+    <div><div class="t">${esc(s.title)}</div><div class="m">${esc(byline(s))}</div></div>
+  </a></li>`;
+const carolRow = s => `
+  <li data-q="${songQuery(s)}"><a href="#song-${s.slug}">
+    <span class="no">${carolNo(s)}</span>
     <div><div class="t">${esc(s.title)}</div><div class="m">${esc(byline(s))}</div></div>
   </a></li>`;
 const psalmRow = s => `
@@ -705,7 +712,7 @@ function wireSearch() {
 }
 function showChoir() {
   document.title = 'St. Francis de Sales';
-  const songs = catalogue.songs.filter(s => !s.hymn && s.kind !== 'psalm');
+  const songs = catalogue.songs.filter(s => !s.hymn && !s.carol && s.kind !== 'psalm');
   app.innerHTML = `
     <h1>St. Francis de Sales</h1>
     ${tabs('choir')}
@@ -713,7 +720,7 @@ function showChoir() {
     <ul class="songs">${songs.map(s => songRow(s)).join('')}</ul>`;
   wireSearch();
 }
-const listSort = { hymns: 'number', psalms: 'week' };  // kept while the app is open, so it's still there coming back from a page
+const listSort = { hymns: 'number', carols: 'number', psalms: 'week' };  // kept while the app is open, so it's still there coming back from a page
 // A numbered list with a sort bar. `sorts` is [key, label, compare]; no compare leaves the catalogue's name order.
 function showNumbered(tab, title, items, placeholder, sorts, row) {
   document.title = title + ' – St. Francis de Sales';
@@ -742,6 +749,10 @@ function showNumbered(tab, title, items, placeholder, sorts, row) {
 function showHymns() {
   showNumbered('hymns', 'Hymns', catalogue.songs.filter(s => s.hymn), 'Search by number or name',
     [['number', 'No.', (a, b) => a.hymn - b.hymn], ['name', 'Name']], hymnRow);
+}
+function showCarols() {
+  showNumbered('carols', 'Carols', catalogue.songs.filter(s => s.carol), 'Search by number or name',
+    [['number', 'No.', (a, b) => a.carol - b.carol], ['name', 'Name']], carolRow);
 }
 function showPsalms() {
   showNumbered('psalms', 'Psalms', catalogue.songs.filter(s => s.kind === 'psalm'), 'Search by week, number or words',
@@ -773,7 +784,7 @@ function showProgramme(p) {
 }
 
 function songNav(meta, prog) {
-  if (!prog) return { top: `<div class="crumb">${meta.kind === 'psalm' ? '<a href="#psalms">← Psalms</a>' : meta.hymn ? '<a href="#hymns">← Hymns</a>' : '<a href="#">← Choir</a>'}</div>`, bottom: '' };
+  if (!prog) return { top: `<div class="crumb">${meta.kind === 'psalm' ? '<a href="#psalms">← Psalms</a>' : meta.hymn ? '<a href="#hymns">← Hymns</a>' : meta.carol ? '<a href="#carols">← Carols</a>' : '<a href="#">← Choir</a>'}</div>`, bottom: '' };
   const i = prog.songs.indexOf(meta.slug);
   const link = (slug, label) => {
     const s = catalogue.songs.find(x => x.slug === slug);
@@ -972,6 +983,7 @@ function route() {
   let m;
   if (hash === 'programmes') showProgrammes();
   else if (hash === 'hymns') showHymns();
+  else if (hash === 'carols') showCarols();
   else if (hash === 'psalms') showPsalms();
   else if ((m = /^programme-(.+)$/.exec(hash)) && catalogue.programmes.find(p => p.slug === m[1])) showProgramme(catalogue.programmes.find(p => p.slug === m[1]));
   else if ((m = /^song-([^/]+)(?:\/(.+))?$/.exec(hash)) && catalogue.songs.find(s => s.slug === m[1])) {
