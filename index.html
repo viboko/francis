@@ -507,11 +507,12 @@ function abcFor(song, shown) {
     return inner.length ? `{${inner.join(' ')}}` : '';
   }).filter(Boolean).join(' ');
   const voices = song.voices.filter(v => shown.has(v.part));
-  const lines = ['X:1', `M:${song.free ? 'none' : song.meter}`, 'L:1/8', `%%score ${score}`, '%%barnumbers 1'];
+  const lines = ['X:1', `M:${song.free ? 'none' : song.meter}`, 'L:1/8', `%%score ${score}`, '%%barnumbers 1', '%%annotationfont Times-Italic 14'];
   voices.forEach(v => lines.push(`V:${v.id} clef=${v.clef}${v.name ? ` name="${v.name}"` : ''}${stems[v.id] || ''}`));
   lines.push(`K:${song.key}`);
   voices.forEach(v => {
-    lines.push(`[V:${v.id}]`, v.abc);
+    // The lower voice on a shared staff leaves out marks the upper one already shows.
+    lines.push(`[V:${v.id}]`, (stems[v.id] === ' stem=down' && v.abc_shared) || v.abc);
     if (v.lyr) lines.push(`w: ${v.lyr}`);
   });
   return lines.join('\n');
