@@ -53,7 +53,8 @@
   .songs .part { font-family:var(--sans); font-size:.78rem; letter-spacing:.02em; color:var(--muted); }
   .songs.num { counter-reset:n; }
   .songs.num a { display:flex; gap:12px; }
-  .songs.num a::before { counter-increment:n; content:counter(n); color:var(--muted); font-family:var(--sans); font-size:.9rem; min-width:1.4em; text-align:right; padding-top:.15em; }
+  .songs.num .off { display:flex; gap:12px; padding:13px 4px; color:var(--muted); }
+  .songs.num a::before, .songs.num .off::before { counter-increment:n; content:counter(n); color:var(--muted); font-family:var(--sans); font-size:.9rem; min-width:1.4em; text-align:right; padding-top:.15em; }
 
   /* song page */
   .crumb { display:flex; justify-content:space-between; gap:12px; font-family:var(--sans); font-size:.88rem; margin-bottom:8px; }
@@ -682,14 +683,14 @@ const psalmRow = s => `
     <div><div class="t">${esc(s.title)}</div><div class="m">${esc(s.response_words)}</div></div>
   </a></li>`;
 const searchBox = (songs, label) => songs.length >= SEARCH_MIN ? `<input class="search" type="search" placeholder="${label}" aria-label="${label}">` : '';
-// A programme's time and day, as the choir says them: 5:30pm Saturday 7th November.
+// A programme's time and day, as the choir says them: 5:30pm Saturday 7th November 2026.
 const programmeWhen = p => {
   const [hour, minute] = p.time.split(':');
   const clock = `${hour % 12 || 12}:${minute}${hour < 12 ? 'am' : 'pm'}`;
   const day = new Date(p.date + 'T12:00:00'), n = day.getDate();
   const nth = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th';
   const name = options => day.toLocaleDateString('en-GB', options);
-  return `${clock} ${name({ weekday: 'long' })} ${n}${nth} ${name({ month: 'long' })}`;
+  return `${clock} ${name({ weekday: 'long' })} ${n}${nth} ${name({ month: 'long' })} ${day.getFullYear()}`;
 };
 
 // Hide the rows that don't match the search box, if there is one. Returns the function, to re-run after a re-sort.
@@ -756,17 +757,19 @@ function showProgrammes() {
     ${list.length ? `<ul class="songs">${list.map(p => `
       <li><a href="#programme-${p.slug}"><div>
         <div class="t">${esc(p.title)}</div>
-        <div class="m">${esc(programmeWhen(p))} · ${p.songs.length} song${p.songs.length === 1 ? '' : 's'}</div>
+        <div class="m">${esc(programmeWhen(p))} · ${p.items.length} song${p.items.length === 1 ? '' : 's'}</div>
       </div></a></li>`).join('')}</ul>` : '<p class="sub">No programmes yet.</p>'}`;
 }
 function showProgramme(p) {
   document.title = p.title + ' – St. Francis de Sales';
-  const songs = p.songs.map(slug => catalogue.songs.find(s => s.slug === slug));
+  // A line can be listed before its song is on the site: it shows, but doesn't link, and Previous and Next skip it.
+  const row = it => it.song ? songRow(catalogue.songs.find(s => s.slug === it.song), p, it.part) : `
+    <li><div class="off"><div><div class="part">${esc(it.part)}</div><div class="t">${esc(it.title)}</div><div class="m">Not on the site yet</div></div></div></li>`;
   app.innerHTML = `
     <div class="crumb"><a href="#programmes">← Programmes</a></div>
     <h1>${esc(p.title)}</h1>
     <p class="sub">${esc(programmeWhen(p))}</p>
-    <ol class="songs num">${songs.map((s, i) => songRow(s, p, p.parts[i])).join('')}</ol>`;
+    <ol class="songs num">${p.items.map(row).join('')}</ol>`;
 }
 
 function songNav(meta, prog) {
