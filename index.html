@@ -576,11 +576,11 @@ function loadMix(song) {
   try { saved = JSON.parse(store.get('mix') || '{}'); } catch (e) {}
   const mix = {};
   partsOf(song).forEach(({ id }) => {
-    const organ = id === 'organ';  // by default it plays quietly and stays off the score
+    const organ = id === 'organ';  // by default it plays quietly; every part is on the score
     const s = saved[id] || {};
-    mix[id] = { level: LEVELS[s.level] !== undefined ? s.level : organ ? 'quiet' : 'full', show: s.show !== undefined ? !!s.show : !organ };
+    mix[id] = { level: LEVELS[s.level] !== undefined ? s.level : organ ? 'quiet' : 'full', show: s.show !== undefined ? !!s.show : true };
   });
-  if (!partsOf(song).some(({ id }) => mix[id].show)) partsOf(song).forEach(({ id }) => { mix[id].show = id !== 'organ'; });  // e.g. bass-only, but this piece has no bass
+  if (!partsOf(song).some(({ id }) => mix[id].show)) partsOf(song).forEach(({ id }) => { mix[id].show = true; });  // e.g. bass-only, but this piece has no bass
   return mix;
 }
 function saveMix() {
@@ -746,7 +746,7 @@ async function showSong(meta, prog) {
     store.set('panel', panel.hidden ? 'closed' : 'open');
   });
   const expressive = document.getElementById('expressive');
-  expressive.checked = store.get('expressive') === 'on';
+  expressive.checked = store.get('expressive') !== 'off';
   expressive.addEventListener('change', () => {
     store.set('expressive', expressive.checked ? 'on' : 'off');
     if (active) startAt(position(), false);
