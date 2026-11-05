@@ -60,6 +60,17 @@
   button.playing { background:var(--accent); border-color:var(--accent); color:#fff; }
   button.quiet { border-color:var(--line); color:var(--muted); }
   #play { min-width:92px; }
+  .topbar { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; width:100%; }
+  #partsbtn { margin-left:auto; }
+  #panel { width:100%; border-top:1px solid var(--line); padding-top:8px; max-height:calc(100vh - 70px); overflow-y:auto; }
+  #panel[hidden] { display:none; }
+  .parts { display:grid; grid-template-columns:auto auto auto; gap:6px 12px; align-items:center; justify-content:start; }
+  .parts .head { color:var(--muted); font-size:.78rem; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:999px; overflow:hidden; }
+  .seg button { border:0; border-radius:0; background:#fff; color:var(--muted); padding:5px 11px; font-size:.82rem; }
+  .seg button + button { border-left:1px solid var(--line); }
+  .seg button.on { background:var(--accent); color:#fff; }
+  .settings { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin-top:10px; }
   .startlabel { color:var(--muted); }
   #playmsg:empty { display:none; }
   .note { color:var(--muted); font-size:.88rem; font-family:var(--sans); margin:0 0 10px; }
@@ -212,6 +223,20 @@ function whenRunning(ac, ms = 300) {
   });
 }
 const freq = m => 440 * Math.pow(2, (m - 69) / 12);
+function organTone(ac, out, midi, t, dur, gain) {
+  const o1 = ac.createOscillator(), o2 = ac.createOscillator(), g = ac.createGain(), g2 = ac.createGain();
+  o1.type = 'sine'; o2.type = 'sine';
+  o1.frequency.value = freq(midi); o2.frequency.value = freq(midi) * 2;
+  g2.gain.value = 0.35;
+  o1.connect(g); o2.connect(g2); g2.connect(g); g.connect(out);
+  const a = 0.015, r = 0.04, end = t + Math.max(dur - 0.015, a + r);
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(gain, t + a);
+  g.gain.setValueAtTime(gain, end - r);
+  g.gain.linearRampToValueAtTime(0, end);
+  o1.start(t); o2.start(t); o1.stop(end + 0.02); o2.stop(end + 0.02);
+  return [o1, o2];
+}
 function tone(ac, out, midi, t, dur, gain) {
   const o1 = ac.createOscillator(), o2 = ac.createOscillator(), g = ac.createGain(), g2 = ac.createGain(), f = ac.createBiquadFilter();
   o1.type = 'triangle'; o2.type = 'sawtooth';
@@ -252,17 +277,46 @@ function stopAll() {
   setPlayButton(false);
   if (!active) return;
   clearInterval(active.pump);
-  clearTimeout(active.timingStart);
+  cancelAnimationFrame(active.raf);
   active.nodes.forEach(n => { try { n.stop(); } catch (e) {} });
   try { active.master.disconnect(); } catch (e) {}
-  if (active.timing) active.timing.stop();
   active = null;
   clearHl();
 }
 function position() {  // in quavers from the top of the piece
-  return active.off + Math.max(0, active.ac.currentTime - active.tStart) / active.eighth;
+  const elapsed = Math.max(0, active.ac.currentTime - active.tStart) / active.eighth;
+  return active.clock.inverse(active.clock.at(active.off) + elapsed);
 }
-function voiceGain(on) { return on ? 1 : 0; }
+const LEVELS = { off: 0, quiet: 0.3, full: 1 };
+
+// Maps score position (quavers) to time, in quavers at the slider's tempo. With the tempo
+// marks off it's the identity; with them on, it's a table summed over small steps.
+function makeClock(song, expressive) {
+  if (!expressive || !song.tempo_marks.length) return { at: q => q, inverse: u => u };
+  const STEP = 0.125, BREATH = 0.75, n = Math.ceil(song.total / STEP) + 1, table = new Float64Array(n + 1);
+  const rate = q => {
+    let r = 1, hold = 1;
+    song.tempo_marks.forEach(m => {
+      if (m.kind === 'tempo' && q >= m.start) r = m.to;
+      else if (m.kind === 'rit' && q >= m.start) r = q >= m.end ? m.to : 1 + (m.to - 1) * (q - m.start) / (m.end - m.start);
+      else if (m.kind === 'hold' && q >= m.start && q < m.end) hold = m.to;
+    });
+    return r * hold;
+  };
+  const breaths = new Set(song.tempo_marks.filter(m => m.kind === 'breath').map(m => Math.round(m.start / STEP)));
+  for (let i = 0; i < n; i++) table[i + 1] = table[i] + STEP / rate(i * STEP) + (breaths.has(i + 1) ? BREATH : 0);
+  return {
+    at(q) {
+      const x = Math.min(q / STEP, n - 1e-6), i = Math.floor(x);
+      return table[i] + (table[i + 1] - table[i]) * (x - i);
+    },
+    inverse(u) {
+      let lo = 0, hi = n;
+      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (table[mid] <= u) lo = mid; else hi = mid; }
+      return (lo + Math.min(1, (u - table[lo]) / (table[hi] - table[lo]))) * STEP;
+    },
+  };
+}
 
 async function startAt(off, withCountIn) {
   stopAll();
@@ -289,7 +343,10 @@ async function startAt(off, withCountIn) {
 
 function beginPlayback(ac, off, withCountIn) {
   const song = P.song, bpm = +document.getElementById('tempo').value, eighth = 30 / bpm;
-  const master = ac.createGain(); master.gain.value = 0.5; master.connect(ac.destination);
+  const clock = makeClock(song, document.getElementById('expressive').checked);
+  const master = ac.createGain(); master.gain.value = 0.5;
+  const limiter = ac.createDynamicsCompressor();  // full choir plus organ chords mustn't clip
+  master.connect(limiter); limiter.connect(ac.destination);
   const nodes = new Set(), gains = {}, queue = [];
   const t0 = ac.currentTime + 0.12;
   let countIn = 0;
@@ -299,26 +356,32 @@ function beginPlayback(ac, off, withCountIn) {
     for (let b = 0; b < m[0]; b++) click(ac, master, t0 + b * step, b === 0).forEach(n => nodes.add(n));
   }
   song.voices.forEach(v => {
-    const g = ac.createGain();
-    g.gain.value = voiceGain(P.shown.has(v.id));
-    g.connect(master);
-    gains[v.id] = g;
-    v.notes.forEach(([p, s, d]) => { if (s + d > off) queue.push({ p, s, d, g, gain: v.id === 'B' ? 0.36 : 0.3 }); });
+    if (!gains[v.part]) {
+      const g = ac.createGain();
+      g.gain.value = LEVELS[P.mix[v.part].level];
+      g.connect(master);
+      gains[v.part] = g;
+    }
+    const organ = v.part === 'organ';
+    v.notes.forEach(([p, s, d]) => {
+      if (s + d > off) queue.push({ p, s, d, g: gains[v.part], organ, gain: organ ? 0.12 : v.part === 'B' ? 0.36 : 0.3 });
+    });
   });
   queue.sort((a, b) => a.s - b.s);
   const tStart = t0 + countIn;
-  active = { ac, master, gains, nodes, eighth, off, tStart, timing: null };
-  const tEnd = tStart + (song.total - off) * eighth + 0.4;
+  const timeAt = q => tStart + (clock.at(q) - clock.at(off)) * eighth;
+  active = { ac, master, gains, nodes, eighth, off, tStart, clock, events: [], next: 0 };
+  const tEnd = timeAt(song.total) + 0.4;
   let next = 0;
   const pump = () => {
     if (!active) return;
     const horizon = ac.currentTime + LOOKAHEAD;
     while (next < queue.length) {
-      const n = queue[next], at = tStart + (Math.max(n.s, off) - off) * eighth;
+      const n = queue[next], start = Math.max(n.s, off), at = timeAt(start);
       if (at > horizon) break;
       next++;
-      const dur = (n.s + n.d - Math.max(n.s, off)) * eighth;
-      tone(ac, n.g, n.p, at, dur, n.gain).forEach(o => {
+      const dur = timeAt(n.s + n.d - 0.02) - at;
+      (n.organ ? organTone : tone)(ac, n.g, n.p, at, dur, n.gain).forEach(o => {
         nodes.add(o);
         o.onended = () => nodes.delete(o);
       });
@@ -328,30 +391,32 @@ function beginPlayback(ac, off, withCountIn) {
   pump();
   active.pump = setInterval(pump, 250);
   startTiming();
+  const tick = () => {
+    if (!active) return;
+    follow();
+    active.raf = requestAnimationFrame(tick);
+  };
+  tick();
 }
 
-// abcjs drives the note highlighting, from the current playback position.
+// Note highlighting. abcjs gives the events of the rendered score; we step through them
+// against the audio clock, so they stay in time through tempo changes.
 function startTiming() {
   if (!active) return;
-  if (active.timing) active.timing.stop();
-  clearTimeout(active.timingStart);
-  active.timing = null;
-  if (!P.visual) return;
-  const bpm = 30 / active.eighth;
-  const timing = new ABCJS.TimingCallbacks(P.visual, {
-    qpm: bpm,
-    eventCallback: ev => {
-      clearHl();
-      if (!ev) return;
-      (ev.elements || []).forEach(els => els.forEach(e => e.classList.add('hl')));
-      followLine(ev);
-    }
-  });
-  active.timing = timing;
-  const wait = (active.tStart - active.ac.currentTime) * 1000;
-  active.timingStart = setTimeout(() => {
-    if (active && active.timing === timing) timing.start(position() * active.eighth, 'seconds');
-  }, Math.max(0, wait));
+  active.next = 0;
+  if (!P.visual) { active.events = []; return; }
+  const timing = new ABCJS.TimingCallbacks(P.visual, { qpm: 60 });  // 60: one crotchet = 1000 ms
+  active.events = timing.noteTimings.filter(e => e.type === 'event' && e.elements).map(e => ({ q: e.milliseconds / 500, elements: e.elements }));
+}
+function follow() {
+  if (active.ac.currentTime < active.tStart) return;
+  const pos = position() + 0.001;
+  let hit = null;
+  while (active.next < active.events.length && active.events[active.next].q <= pos) hit = active.events[active.next++];
+  if (!hit) return;
+  clearHl();
+  hit.elements.forEach(els => els.forEach(e => e.classList.add('hl')));
+  followLine(hit);
 }
 
 /* auto-scroll: keep the playing line in view, moving only when the line changes */
@@ -386,15 +451,20 @@ const barAt = q => {
   return bars[i];
 };
 function abcFor(song, shown) {
-  const stems = {};
-  const score = (song.score.match(/\([^)]*\)|\S+/g) || []).map(group => {
-    const ids = group.replace(/[()]/g, '').split(/\s+/).filter(id => shown.has(id));
+  const stems = {}, part = id => song.voices.find(v => v.id === id).part;
+  const staff = group => {
+    const ids = group.replace(/[()]/g, '').split(/\s+/).filter(id => id && shown.has(part(id)));
     if (ids.length === 2) { stems[ids[0]] = ' stem=up'; stems[ids[1]] = ' stem=down'; }
     return ids.length > 1 ? `(${ids.join(' ')})` : ids.join('');
+  };
+  const score = (song.score.match(/\{[^}]*\}|\([^)]*\)|\S+/g) || []).map(group => {
+    if (group[0] !== '{') return staff(group);
+    const inner = (group.slice(1, -1).match(/\([^)]*\)|\S+/g) || []).map(staff).filter(Boolean);
+    return inner.length ? `{${inner.join(' ')}}` : '';
   }).filter(Boolean).join(' ');
-  const voices = song.voices.filter(v => shown.has(v.id));
+  const voices = song.voices.filter(v => shown.has(v.part));
   const lines = ['X:1', `M:${song.meter}`, 'L:1/8', `%%score ${score}`, '%%barnumbers 1'];
-  voices.forEach(v => lines.push(`V:${v.id} clef=${v.clef} name="${v.name}"${stems[v.id] || ''}`));
+  voices.forEach(v => lines.push(`V:${v.id} clef=${v.clef}${v.name ? ` name="${v.name}"` : ''}${stems[v.id] || ''}`));
   lines.push(`K:${song.key}`);
   voices.forEach(v => {
     lines.push(`[V:${v.id}]`, v.abc);
@@ -406,9 +476,9 @@ function renderScore() {
   P.small = narrow();
   P.followed = null;
   P.layout = [];
-  if (!P.song.voices.some(v => P.shown.has(v.id))) {
+  if (!P.shown.size) {
     P.visual = null;
-    P.root.innerHTML = '<p class="empty">Tick a voice to show its music.</p>';
+    P.root.innerHTML = '<p class="empty">Tick Show on a part to see its music.</p>';
     return;
   }
   P.visual = ABCJS.renderAbc(P.root, abcFor(P.song, P.shown), {
@@ -495,19 +565,30 @@ document.addEventListener('visibilitychange', () => {
   if (ctx && ctx.state !== 'running') dropContext();
 });
 
-/* ---------- voice choices, remembered per device ---------- */
-function shownVoices(song) {
-  let saved = {};
-  try { saved = JSON.parse(store.get('voices') || '{}'); } catch (e) {}
-  const shown = new Set(song.voices.filter(v => saved[v.id] !== false).map(v => v.id));
-  return shown.size ? shown : new Set(song.voices.map(v => v.id));  // e.g. bass-only, but this piece has no bass
+/* ---------- the mix: each part's level and whether it's on the score, remembered per device ---------- */
+function partsOf(song) {
+  const seen = new Map();
+  song.voices.forEach(v => { if (!seen.has(v.part)) seen.set(v.part, v.name); });
+  return [...seen].map(([id, name]) => ({ id, name }));
 }
-function rememberVoice(id, on) {
+function loadMix(song) {
   let saved = {};
-  try { saved = JSON.parse(store.get('voices') || '{}'); } catch (e) {}
-  saved[id] = on;
-  store.set('voices', JSON.stringify(saved));
+  try { saved = JSON.parse(store.get('mix') || '{}'); } catch (e) {}
+  const mix = {};
+  partsOf(song).forEach(({ id }) => {
+    const organ = id === 'organ';  // by default it plays quietly and stays off the score
+    const s = saved[id] || {};
+    mix[id] = { level: LEVELS[s.level] !== undefined ? s.level : organ ? 'quiet' : 'full', show: s.show !== undefined ? !!s.show : !organ };
+  });
+  if (!partsOf(song).some(({ id }) => mix[id].show)) partsOf(song).forEach(({ id }) => { mix[id].show = id !== 'organ'; });  // e.g. bass-only, but this piece has no bass
+  return mix;
 }
+function saveMix() {
+  let saved = {};
+  try { saved = JSON.parse(store.get('mix') || '{}'); } catch (e) {}
+  store.set('mix', JSON.stringify(Object.assign(saved, P.mix)));
+}
+const shownFrom = mix => new Set(Object.keys(mix).filter(id => mix[id].show));
 
 /* ---------- views ---------- */
 const tabs = on => `
@@ -593,22 +674,35 @@ async function showSong(meta, prog) {
     <p class="sub">${esc(byline(song))} · ${keyName(song.key)} · ♩ = ${song.tempo}</p>
     ${song.note ? `<p class="note">${esc(song.note)}</p>` : ''}
     <div class="controls">
-      <div class="group">
+      <div class="topbar">
         <button id="play" type="button">▶ Play</button>
         <span class="startlabel" id="startlabel"></span>
         <button id="home" class="quiet" type="button" hidden>Start from beginning</button>
         <span id="playmsg" class="err" style="margin:0"></span>
+        <button id="partsbtn" class="quiet" type="button" aria-expanded="false" aria-controls="panel">Parts ▾</button>
       </div>
-      <div class="group" id="voices">${song.voices.map(v => `<label><input type="checkbox" data-v="${v.id}"> ${esc(v.name)}</label>`).join('')}</div>
-      <div class="group">
-        <label>Tempo <input id="tempo" type="range" min="30" max="${maxT}" value="${song.tempo}"> <span id="tval">${song.tempo}</span></label>
-        <label><input id="countin" type="checkbox"> Count-in</label>
+      <div id="panel" hidden>
+        <div class="parts">
+          <span class="head">Part</span><span class="head">Sound</span><span class="head">Show</span>
+          ${partsOf(song).map(p => `
+            <span>${esc(p.name)}</span>
+            <span class="seg" role="group" aria-label="${esc(p.name)} sound">
+              ${['off', 'quiet', 'full'].map(l => `<button type="button" data-part="${p.id}" data-level="${l}">${l[0].toUpperCase() + l.slice(1)}</button>`).join('')}
+            </span>
+            <input type="checkbox" data-show="${p.id}" aria-label="Show ${esc(p.name)} on the score">`).join('')}
+        </div>
+        <div class="settings">
+          <label>Tempo <input id="tempo" type="range" min="30" max="${maxT}" value="${song.tempo}"> <span id="tval">${song.tempo}</span></label>
+          <label><input id="countin" type="checkbox"> Count-in</label>
+          <label ${song.tempo_marks.length ? '' : 'hidden'}><input id="expressive" type="checkbox"> Rit. &amp; pauses</label>
+        </div>
       </div>
     </div>
     <div class="score"></div>
     <p class="foot">Tap a bar to start from there.</p>
     ${nav.bottom}`;
-  P = { song, root: app.querySelector('.score'), shown: shownVoices(song), startBar: 0, layout: [], followed: null };
+  const mix = loadMix(song);
+  P = { song, root: app.querySelector('.score'), mix, shown: shownFrom(mix), startBar: 0, layout: [], followed: null };
   renderScore();
 
   document.getElementById('play').addEventListener('click', () => {
@@ -620,16 +714,42 @@ async function showSong(meta, prog) {
     const bar = e.target.dataset && e.target.dataset.bar;
     if (bar !== undefined) selectBar(+bar);
   });
-  app.querySelectorAll('#voices input').forEach(box => {
-    box.checked = P.shown.has(box.dataset.v);
+  const showLevels = () => app.querySelectorAll('.seg button').forEach(b => b.classList.toggle('on', P.mix[b.dataset.part].level === b.dataset.level));
+  showLevels();
+  app.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
+    const { part, level } = b.dataset;
+    P.mix[part].level = level;
+    saveMix();
+    showLevels();
+    if (active) active.gains[part].gain.setTargetAtTime(LEVELS[level], active.ac.currentTime, 0.01);
+  }));
+  app.querySelectorAll('input[data-show]').forEach(box => {
+    box.checked = P.mix[box.dataset.show].show;
     box.addEventListener('change', () => {
-      const id = box.dataset.v;
-      if (box.checked) P.shown.add(id); else P.shown.delete(id);
-      rememberVoice(id, box.checked);
-      if (active) active.gains[id].gain.setTargetAtTime(voiceGain(box.checked), active.ac.currentTime, 0.01);
+      P.mix[box.dataset.show].show = box.checked;
+      saveMix();
+      P.shown = shownFrom(P.mix);
       renderScore();
       startTiming();
     });
+  });
+  const panel = document.getElementById('panel'), partsBtn = document.getElementById('partsbtn');
+  const setPanel = open => {
+    panel.hidden = !open;
+    partsBtn.setAttribute('aria-expanded', String(open));
+    partsBtn.textContent = open ? 'Parts ▴' : 'Parts ▾';
+  };
+  const savedPanel = store.get('panel');
+  setPanel(savedPanel ? savedPanel === 'open' : !narrow());
+  partsBtn.addEventListener('click', () => {
+    setPanel(panel.hidden);
+    store.set('panel', panel.hidden ? 'closed' : 'open');
+  });
+  const expressive = document.getElementById('expressive');
+  expressive.checked = store.get('expressive') === 'on';
+  expressive.addEventListener('change', () => {
+    store.set('expressive', expressive.checked ? 'on' : 'off');
+    if (active) startAt(position(), false);
   });
   const tempo = document.getElementById('tempo');
   tempo.addEventListener('input', () => { document.getElementById('tval').textContent = tempo.value; });
