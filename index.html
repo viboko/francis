@@ -746,7 +746,7 @@ async function showSong(meta, prog) {
     store.set('panel', panel.hidden ? 'closed' : 'open');
   });
   const expressive = document.getElementById('expressive');
-  expressive.checked = store.get('expressive') === 'on';
+  expressive.checked = store.get('expressive') !== 'off';
   expressive.addEventListener('change', () => {
     store.set('expressive', expressive.checked ? 'on' : 'off');
     if (active) startAt(position(), false);
