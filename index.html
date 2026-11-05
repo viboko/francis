@@ -43,6 +43,13 @@
   .songs a:hover { background:#f1eee6; }
   .songs .t { font-size:1.12rem; }
   .songs .m { color:var(--muted); font-size:.86rem; font-family:var(--sans); }
+  .sortbar { display:flex; gap:12px; border-bottom:1px solid var(--line); padding:0 4px; }
+  .sortbar button { border:0; border-radius:0; background:none; padding:8px 0; color:var(--muted); font-size:.82rem; }
+  .sortbar button:hover { background:none; color:var(--ink); }
+  .sortbar button[aria-pressed=true] { color:var(--ink); font-weight:600; }
+  .sortbar button:first-child { min-width:2.6rem; text-align:right; }
+  .songs.hymns a { display:flex; gap:12px; align-items:baseline; }
+  .songs.hymns .no { min-width:2.6rem; text-align:right; font-family:var(--sans); font-variant-numeric:tabular-nums; color:var(--muted); }
   .songs.num { counter-reset:n; }
   .songs.num a { display:flex; gap:12px; }
   .songs.num a::before { counter-increment:n; content:counter(n); color:var(--muted); font-family:var(--sans); font-size:.9rem; min-width:1.4em; text-align:right; padding-top:.15em; }
@@ -111,7 +118,7 @@ const CONFIG = {"plain": false, "salt": "MWcFjmhCUtOm84gdFPP0Ww==", "iterations"
 const app = document.getElementById('app');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const keyName = k => k.replace(/b(m?)$/, '♭$1').replace(/#/, '♯');
-const byline = s => [s.composer, s.words && 'words ' + s.words].filter(Boolean).join(' · ');
+const byline = s => [s.composer, s.words && s.words !== s.composer && 'words ' + s.words].filter(Boolean).join(' · ');
 const SEARCH_MIN = 8;  // show the search box once the list is this long
 
 const store = {
@@ -619,31 +626,74 @@ const shownFrom = mix => new Set(Object.keys(mix).filter(id => mix[id].show));
 /* ---------- views ---------- */
 const tabs = on => `
   <nav class="tabs">
-    <a href="#" class="${on === 'rep' ? 'on' : ''}">Repertoire</a>
+    <a href="#" class="${on === 'choir' ? 'on' : ''}">Choir</a>
+    <a href="#hymns" class="${on === 'hymns' ? 'on' : ''}">Hymns</a>
     <a href="#programmes" class="${on === 'prog' ? 'on' : ''}">Programmes</a>
   </nav>`;
+const hymnLabel = s => s.hymn ? `Hymn ${s.hymn} · ` : '';
+const songQuery = s => esc((s.title + ' ' + s.composer + ' ' + s.words + ' ' + (s.hymn || '')).toLowerCase());
 const songRow = (s, prog) => `
-  <li data-q="${esc((s.title + ' ' + s.composer + ' ' + s.words).toLowerCase())}"><a href="#song-${s.slug}${prog ? '/' + prog.slug : ''}">
+  <li data-q="${songQuery(s)}"><a href="#song-${s.slug}${prog ? '/' + prog.slug : ''}">
+    <div><div class="t">${esc(s.title)}</div><div class="m">${esc(hymnLabel(s) + byline(s))}</div></div>
+  </a></li>`;
+const hymnRow = s => `
+  <li data-q="${songQuery(s)}"><a href="#song-${s.slug}">
+    <span class="no">${s.hymn}</span>
     <div><div class="t">${esc(s.title)}</div><div class="m">${esc(byline(s))}</div></div>
   </a></li>`;
+const searchBox = (songs, label) => songs.length >= SEARCH_MIN ? `<input class="search" type="search" placeholder="${label}" aria-label="${label}">` : '';
 const niceDate = d => {
   const parsed = new Date(d + 'T12:00:00');
   return isNaN(parsed) ? d : parsed.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 };
 
-function showRepertoire() {
+// Hide the rows that don't match the search box, if there is one. Returns the function, to re-run after a re-sort.
+function wireSearch() {
+  const search = app.querySelector('.search');
+  const apply = () => {
+    const q = search ? search.value.trim().toLowerCase() : '';
+    app.querySelectorAll('.songs li').forEach(li => { li.hidden = !li.dataset.q.includes(q); });
+  };
+  if (search) search.addEventListener('input', apply);
+  return apply;
+}
+function showChoir() {
   document.title = 'Choir practice';
-  const songs = catalogue.songs;
+  const songs = catalogue.songs.filter(s => !s.hymn);
   app.innerHTML = `
     <h1>Choir practice</h1>
-    ${tabs('rep')}
-    ${songs.length >= SEARCH_MIN ? '<input class="search" type="search" placeholder="Search songs" aria-label="Search songs">' : ''}
+    ${tabs('choir')}
+    ${searchBox(songs, 'Search songs')}
     <ul class="songs">${songs.map(s => songRow(s)).join('')}</ul>`;
-  const search = app.querySelector('.search');
-  if (search) search.addEventListener('input', () => {
-    const q = search.value.trim().toLowerCase();
-    app.querySelectorAll('.songs li').forEach(li => { li.hidden = !li.dataset.q.includes(q); });
-  });
+  wireSearch();
+}
+let hymnSort = 'number';  // kept while the app is open, so it's still there coming back from a hymn
+function showHymns() {
+  document.title = 'Hymns – Choir practice';
+  const hymns = catalogue.songs.filter(s => s.hymn);  // the catalogue is already in name order
+  app.innerHTML = `
+    <h1>Choir practice</h1>
+    ${tabs('hymns')}
+    ${searchBox(hymns, 'Search by number or name')}
+    <div class="sortbar">
+      <button type="button" data-sort="number">No.</button>
+      <button type="button" data-sort="name">Name</button>
+    </div>
+    <ul class="songs hymns"></ul>`;
+  const filter = wireSearch();
+  const buttons = app.querySelectorAll('.sortbar button');
+  const draw = () => {
+    const sorted = hymnSort === 'number' ? [...hymns].sort((a, b) => a.hymn - b.hymn) : hymns;
+    app.querySelector('.songs').innerHTML = sorted.map(hymnRow).join('');
+    buttons.forEach(b => {
+      const on = b.dataset.sort === hymnSort;
+      b.setAttribute('aria-pressed', on);
+      b.textContent = b.textContent.replace(/ ▾$/, '') + (on ? ' ▾' : '');
+    });
+    filter();
+  };
+  buttons.forEach(b => b.addEventListener('click', () => { hymnSort = b.dataset.sort; draw(); }));
+  draw();
 }
 function showProgrammes() {
   document.title = 'Programmes – Choir practice';
@@ -668,7 +718,7 @@ function showProgramme(p) {
 }
 
 function songNav(meta, prog) {
-  if (!prog) return { top: '<div class="crumb"><a href="#">← All songs</a></div>', bottom: '' };
+  if (!prog) return { top: `<div class="crumb">${meta.hymn ? '<a href="#hymns">← Hymns</a>' : '<a href="#">← Choir</a>'}</div>`, bottom: '' };
   const i = prog.songs.indexOf(meta.slug);
   const link = (slug, label) => {
     const s = catalogue.songs.find(x => x.slug === slug);
@@ -697,7 +747,7 @@ async function showSong(meta, prog) {
   app.innerHTML = `
     ${nav.top}
     <h1>${esc(song.title)}</h1>
-    <p class="sub">${esc(byline(song))} · ${keyName(song.key)} · ♩ = ${song.tempo}<span id="transposed"></span></p>
+    <p class="sub">${esc(hymnLabel(meta) + byline(song))} · ${keyName(song.key)} · ♩ = ${song.tempo}<span id="transposed"></span></p>
     ${song.note ? `<p class="note">${esc(song.note)}</p>` : ''}
     <div class="controls">
       <div class="topbar">
@@ -842,11 +892,12 @@ function route() {
   const hash = location.hash.replace(/^#/, '');
   let m;
   if (hash === 'programmes') showProgrammes();
+  else if (hash === 'hymns') showHymns();
   else if ((m = /^programme-(.+)$/.exec(hash)) && catalogue.programmes.find(p => p.slug === m[1])) showProgramme(catalogue.programmes.find(p => p.slug === m[1]));
   else if ((m = /^song-([^/]+)(?:\/(.+))?$/.exec(hash)) && catalogue.songs.find(s => s.slug === m[1])) {
     const prog = catalogue.programmes.find(p => p.slug === m[2] && p.songs.includes(m[1]));
     showSong(catalogue.songs.find(s => s.slug === m[1]), prog);
-  } else showRepertoire();
+  } else showChoir();
   window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', () => { if (catalogue) route(); });
