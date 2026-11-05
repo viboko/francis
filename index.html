@@ -66,7 +66,7 @@
   button:hover { background:#f1eee6; }
   button.playing { background:var(--accent); border-color:var(--accent); color:#fff; }
   button.quiet { border-color:var(--line); color:var(--muted); }
-  #play { min-width:92px; }
+  [data-play] { min-width:92px; }
   .topbar { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; width:100%; }
   #partsbtn { margin-left:auto; }
   .controls { cursor:pointer; }
@@ -97,6 +97,19 @@
   .score svg .abcjs-note.hl path, .score svg .abcjs-note.hl, .score svg .abcjs-rest.hl path, .score svg .abcjs-rest.hl { fill:var(--hl); }
   .empty { color:var(--muted); font-family:var(--sans); padding:24px; text-align:center; }
   .foot { color:var(--muted); font-size:.82rem; font-family:var(--sans); margin-top:12px; }
+
+  /* psalms */
+  .xhead { font:600 .88rem var(--sans); color:var(--muted); margin:16px 0 6px; }
+  .score.free svg .abcjs-stem { display:none; }
+  .words { margin-top:22px; font-size:1.08rem; }
+  .words h2 { font:600 .88rem var(--sans); color:var(--muted); margin:22px 0 8px; }
+  .words .ref { font-weight:normal; }
+  .words .see { font-style:italic; color:var(--muted); font-size:.92rem; margin:0 0 8px; }
+  .words ol { margin:0; padding:0 0 0 1.5em; }
+  .words li { margin-bottom:1em; padding-left:.2em; }
+  .words li::marker { color:var(--muted); }
+  .words .line { padding-left:1em; text-indent:-1em; }
+  .words u { text-decoration-thickness:1.5px; text-underline-offset:.16em; }
   @media (max-width:699px) {
     main { padding:12px 8px 40px; }
     h1 { font-size:1.3rem; }
@@ -279,14 +292,18 @@ function click(ac, out, t, accent) {
 /* ---------- player: one song page at a time ---------- */
 const LOOKAHEAD = 3;     // seconds of notes scheduled ahead (timers can be throttled to 1/s)
 let P = null;            // the open song page
+let S = null;            // its score that's playing or was last picked: P.scores holds one per song, two per psalm
 let active = null;       // the current playback
 let playToken = 0;       // cancels a start still waiting for the audio to wake
 let routeToken = 0;      // cancels a song still loading when we navigate away
 
-function clearHl() { if (P) P.root.querySelectorAll('.hl').forEach(e => e.classList.remove('hl')); }
+function clearHl() { if (P) P.scores.forEach(s => s.root.querySelectorAll('.hl').forEach(e => e.classList.remove('hl'))); }
 function setPlayButton(playing) {
-  const b = document.getElementById('play');
-  if (b) { b.textContent = playing ? '■ Stop' : '▶ Play'; b.classList.toggle('playing', playing); }
+  app.querySelectorAll('[data-play]').forEach(b => {
+    const on = playing && P.scores[+b.dataset.play] === S;
+    b.textContent = on ? '■ Stop' : '▶ ' + b.dataset.label;
+    b.classList.toggle('playing', on);
+  });
 }
 function stopAll() {
   playToken++;
@@ -365,7 +382,7 @@ async function startAt(off, withCountIn) {
 }
 
 function beginPlayback(ac, off, withCountIn) {
-  const song = P.song, bpm = +document.getElementById('tempo').value, eighth = 30 / bpm;
+  const song = S.song, bpm = +document.getElementById('tempo').value, eighth = 30 / bpm;
   const clock = makeClock(song, document.getElementById('expressive').checked);
   const master = ac.createGain(); master.gain.value = 0.5;
   const limiter = ac.createDynamicsCompressor();  // full choir plus organ chords mustn't clip
@@ -428,9 +445,9 @@ function beginPlayback(ac, off, withCountIn) {
 function startTiming() {
   if (!active) return;
   active.next = 0;
-  if (!P.visual) { active.events = []; return; }
+  if (!S.visual) { active.events = []; return; }
   // At qpm 60 one beat is 1000 ms, but abcjs's beat depends on the opening meter (a dotted crotchet in 6/8).
-  const timing = new ABCJS.TimingCallbacks(P.visual, { qpm: 60 }), quaversPerMs = P.visual.getBeatLength() * 8 / 1000;
+  const timing = new ABCJS.TimingCallbacks(S.visual, { qpm: 60 }), quaversPerMs = S.visual.getBeatLength() * 8 / 1000;
   active.events = timing.noteTimings.filter(e => e.type === 'event' && e.elements).map(e => ({ q: e.milliseconds * quaversPerMs, elements: e.elements }));
 }
 function follow() {
@@ -452,13 +469,13 @@ function followLine(ev) {
   const m = el && /abcjs-l(\d+)/.exec(el.getAttribute('class') || '');
   if (!m) return;
   const line = +m[1];
-  if (line === P.followed) return;
-  P.followed = line;
+  if (line === S.followed) return;
+  S.followed = line;
   if (Date.now() - lastUserScroll < 2500) return;
   scrollToLine(line);
 }
 function scrollToLine(line) {
-  const staves = P.root.querySelectorAll(`.abcjs-staff.abcjs-l${line}`);
+  const staves = S.root.querySelectorAll(`.abcjs-staff.abcjs-l${line}`);
   if (!staves.length) return;
   const top = staves[0].getBoundingClientRect().top, bottom = staves[staves.length - 1].getBoundingClientRect().bottom;
   const controls = document.querySelector('.controls').getBoundingClientRect();
@@ -470,7 +487,7 @@ function scrollToLine(line) {
 /* ---------- score rendering ---------- */
 const narrow = () => window.innerWidth < 700;
 const barAt = q => {
-  const bars = P.song.bars;
+  const bars = S.song.bars;
   let i = bars.length - 1;
   while (i > 0 && bars[i].start > q) i--;
   return bars[i];
@@ -488,7 +505,7 @@ function abcFor(song, shown) {
     return inner.length ? `{${inner.join(' ')}}` : '';
   }).filter(Boolean).join(' ');
   const voices = song.voices.filter(v => shown.has(v.part));
-  const lines = ['X:1', `M:${song.meter}`, 'L:1/8', `%%score ${score}`, '%%barnumbers 1'];
+  const lines = ['X:1', `M:${song.free ? 'none' : song.meter}`, 'L:1/8', `%%score ${score}`, '%%barnumbers 1'];
   voices.forEach(v => lines.push(`V:${v.id} clef=${v.clef}${v.name ? ` name="${v.name}"` : ''}${stems[v.id] || ''}`));
   lines.push(`K:${song.key}`);
   voices.forEach(v => {
@@ -497,22 +514,28 @@ function abcFor(song, shown) {
   });
   return lines.join('\n');
 }
-function renderScore() {
-  P.small = narrow();
-  P.followed = null;
-  P.layout = [];
+// A psalm's excerpts are short, so each keeps to one line where it fits.
+function barsPerLine(s) {
+  if (P.scores.length === 1) return s.small ? 2 : 3;
+  return s.small && s.song.free ? 2 : s.song.bars.length;
+}
+function renderScore(s) {
+  s.small = narrow();
+  s.followed = null;
+  s.layout = [];
   if (!P.shown.size) {
-    P.visual = null;
-    P.root.innerHTML = '<p class="empty">Tick Show on a part to see its music.</p>';
+    s.visual = null;
+    s.root.innerHTML = '<p class="empty">Tick Show on a part to see its music.</p>';
     return;
   }
-  P.visual = ABCJS.renderAbc(P.root, abcFor(P.song, P.shown), {
-    responsive: 'resize', add_classes: true, selectTypes: false, staffwidth: P.small ? 720 : 1000, scale: 1,
-    wrap: { minSpacing: 1.0, maxSpacing: 2.8, preferredMeasuresPerLine: P.small ? 2 : 3 },
+  s.visual = ABCJS.renderAbc(s.root, abcFor(s.song, P.shown), {
+    responsive: 'resize', add_classes: true, selectTypes: false, staffwidth: s.small ? 720 : 1000, scale: 1,
+    wrap: { minSpacing: 1.0, maxSpacing: 2.8, preferredMeasuresPerLine: barsPerLine(s) },
     paddingtop: 4, paddingbottom: 4
   })[0];
-  layoutBars();
+  layoutBars(s);
 }
+const renderScores = () => P.scores.forEach(renderScore);
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 function svgRect(cls, b) {
@@ -521,15 +544,15 @@ function svgRect(cls, b) {
   r.setAttribute('x', b.x); r.setAttribute('y', b.y); r.setAttribute('width', b.w); r.setAttribute('height', b.h);
   return r;
 }
-const barSkipped = i => (P.song.skips || []).some(s => s.bars.includes(i));
+const barSkipped = (s, i) => (s.song.skips || []).some(s => s.bars.includes(i));
 // Work out each bar's box from the engraved barlines and add a tap target over it.
-function layoutBars() {
-  const svg = P.root.querySelector('svg');
+function layoutBars(s) {
+  const svg = s.root.querySelector('svg');
   if (!svg) return;
   const layer = document.createElementNS(SVGNS, 'g');
   svg.insertBefore(layer, svg.firstChild);
-  P.layer = layer;
-  const nLines = P.visual.lines.filter(l => l.staff).length;
+  s.layer = layer;
+  const nLines = s.visual.lines.filter(l => l.staff).length;
   for (let line = 0; line < nLines; line++) {
     const staves = [...svg.querySelectorAll(`.abcjs-staff.abcjs-l${line}`)];
     if (!staves.length) continue;
@@ -540,25 +563,25 @@ function layoutBars() {
     let left = (firsts.length ? Math.min(...firsts) : boxes[0].x) - 8;
     xs.forEach(x => {
       if (x - left < 4) return;  // a stray barline at the start of the line
-      P.layout.push({ line, x: left, y: top, w: x - left, h: bottom - top });
+      s.layout.push({ line, x: left, y: top, w: x - left, h: bottom - top });
       left = x;
     });
     // Relabel abcjs's bar numbers as printed in the score (%%setbarnb doesn't work in abcjs).
-    const onLine = P.layout.map((b, i) => ({ b, i })).filter(o => o.b.line === line);
+    const onLine = s.layout.map((b, i) => ({ b, i })).filter(o => o.b.line === line);
     svg.querySelectorAll(`.abcjs-bar-number.abcjs-l${line}`).forEach(el => {
       const x = el.getBBox().x;
       const near = onLine.reduce((a, o) => Math.abs(o.b.x - x) < Math.abs(a.b.x - x) ? o : a);
-      (el.querySelector('tspan') || el).textContent = String(P.song.first_bar + near.i);
-      el.classList.toggle('skipped', barSkipped(near.i));
+      (el.querySelector('tspan') || el).textContent = String(s.song.first_bar + near.i);
+      el.classList.toggle('skipped', barSkipped(s, near.i));
     });
   }
-  if (P.layout.length !== P.song.bars.length) console.warn(`laid out ${P.layout.length} bars, expected ${P.song.bars.length}`);
-  P.layout.forEach((b, i) => {
-    const next = P.layout.find(o => o.line === b.line + 1);
+  if (s.layout.length !== s.song.bars.length) console.warn(`laid out ${s.layout.length} bars, expected ${s.song.bars.length}`);
+  s.layout.forEach((b, i) => {
+    const next = s.layout.find(o => o.line === b.line + 1);
     const box = { x: b.x, y: b.y, w: b.w, h: (next ? next.y : b.y + b.h + 40) - b.y };
     // A skipped bar gets no tap target, and a grey wash over its music instead.
     // It stops short of the next line, whose bar numbers sit just above its staves.
-    if (barSkipped(i)) { svg.appendChild(svgRect('bar-skip', { ...box, h: box.h - (next ? 16 : 0) })); return; }
+    if (barSkipped(s, i)) { svg.appendChild(svgRect('bar-skip', { ...box, h: box.h - (next ? 16 : 0) })); return; }
     const hit = svgRect('bar-hit', box);
     hit.dataset.bar = i;
     layer.appendChild(hit);
@@ -566,27 +589,36 @@ function layoutBars() {
   drawSelection();
 }
 function drawSelection() {
-  if (!P.layer) return;
-  P.layer.querySelectorAll('.bar-sel').forEach(e => e.remove());
+  P.scores.forEach(s => {
+    if (!s.layer) return;
+    s.layer.querySelectorAll('.bar-sel').forEach(e => e.remove());
+    const b = s.startBar && s.layout[s.startBar];
+    if (b) s.layer.insertBefore(svgRect('bar-sel', b), s.layer.firstChild);
+  });
   const label = document.getElementById('startlabel');
-  if (label) label.textContent = P.startBar ? `from bar ${P.song.first_bar + P.startBar}` : '';
+  const which = P.scores.length > 1 ? S.song.name + ', ' : '';
+  if (label) label.textContent = S.startBar ? `${which}from bar ${S.song.first_bar + S.startBar}` : '';
   const home = document.getElementById('home');
-  if (home) home.hidden = !P.startBar;
-  if (!P.startBar) return;
-  const b = P.layout[P.startBar];
-  if (b) P.layer.insertBefore(svgRect('bar-sel', b), P.layer.firstChild);
+  if (home) home.hidden = !S.startBar;
 }
-function selectBar(i) {
-  P.startBar = i;
+// Only one start bar at a time: picking the other excerpt forgets the old one's.
+function selectScore(s) {
+  if (s !== S) P.scores.forEach(o => { if (o !== s) o.startBar = 0; });
+  S = s;
+}
+function selectBar(s, i) {
+  const playing = !!active;
+  selectScore(s);
+  s.startBar = i;
   drawSelection();
-  if (active) startAt(P.song.bars[i].start, false);
+  if (playing) startAt(s.song.bars[i].start, false);
 }
 
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (P && P.small !== narrow()) { renderScore(); if (active) startTiming(); }
+    if (P && P.scores[0].small !== narrow()) { renderScores(); if (active) startTiming(); }
   }, 200);
 });
 // iOS interrupts audio on screen lock. Coming back, stop cleanly and drop a dead context.
@@ -599,7 +631,7 @@ document.addEventListener('visibilitychange', () => {
 /* ---------- each part's sound and show settings and the transposition, remembered per song on this device ---------- */
 function partsOf(song) {
   const seen = new Map();
-  song.voices.forEach(v => { if (!seen.has(v.part)) seen.set(v.part, v.name); });
+  (song.excerpts || [song]).flatMap(e => e.voices).forEach(v => { if (!seen.has(v.part)) seen.set(v.part, v.name); });
   return [...seen].map(([id, name]) => ({ id, name }));
 }
 function loadSettings(song) {
@@ -628,18 +660,25 @@ const tabs = on => `
   <nav class="tabs">
     <a href="#" class="${on === 'choir' ? 'on' : ''}">Choir</a>
     <a href="#hymns" class="${on === 'hymns' ? 'on' : ''}">Hymns</a>
+    <a href="#psalms" class="${on === 'psalms' ? 'on' : ''}">Psalms</a>
     <a href="#programmes" class="${on === 'prog' ? 'on' : ''}">Programmes</a>
   </nav>`;
-const hymnLabel = s => s.hymn ? `Hymn ${s.hymn} · ` : '';
-const songQuery = s => esc((s.title + ' ' + s.composer + ' ' + s.words + ' ' + (s.hymn || '')).toLowerCase());
+const hymnLabel = s => s.hymn ? `Hymn ${s.hymn} · ` : s.number ? `No. ${s.number} · ` : '';
+const songQuery = s => esc([s.title, s.composer, s.words, s.hymn, s.number, s.ref, s.response_words].filter(Boolean).join(' ').toLowerCase());
+const songMeta = s => s.kind === 'psalm' ? 'Psalm · ' + hymnLabel(s) + s.response_words : hymnLabel(s) + byline(s);
 const songRow = (s, prog) => `
   <li data-q="${songQuery(s)}"><a href="#song-${s.slug}${prog ? '/' + prog.slug : ''}">
-    <div><div class="t">${esc(s.title)}</div><div class="m">${esc(hymnLabel(s) + byline(s))}</div></div>
+    <div><div class="t">${esc(s.title)}</div><div class="m">${esc(songMeta(s))}</div></div>
   </a></li>`;
 const hymnRow = s => `
   <li data-q="${songQuery(s)}"><a href="#song-${s.slug}">
     <span class="no">${s.hymn}</span>
     <div><div class="t">${esc(s.title)}</div><div class="m">${esc(byline(s))}</div></div>
+  </a></li>`;
+const psalmRow = s => `
+  <li data-q="${songQuery(s)}"><a href="#song-${s.slug}">
+    <span class="no">${s.number || ''}</span>
+    <div><div class="t">${esc(s.title)}</div><div class="m">${esc(s.response_words)}</div></div>
   </a></li>`;
 const searchBox = (songs, label) => songs.length >= SEARCH_MIN ? `<input class="search" type="search" placeholder="${label}" aria-label="${label}">` : '';
 const niceDate = d => {
@@ -659,7 +698,7 @@ function wireSearch() {
 }
 function showChoir() {
   document.title = 'St. Francis de Sales';
-  const songs = catalogue.songs.filter(s => !s.hymn);
+  const songs = catalogue.songs.filter(s => !s.hymn && s.kind !== 'psalm');
   app.innerHTML = `
     <h1>St. Francis de Sales</h1>
     ${tabs('choir')}
@@ -667,33 +706,40 @@ function showChoir() {
     <ul class="songs">${songs.map(s => songRow(s)).join('')}</ul>`;
   wireSearch();
 }
-let hymnSort = 'number';  // kept while the app is open, so it's still there coming back from a hymn
-function showHymns() {
-  document.title = 'Hymns – St. Francis de Sales';
-  const hymns = catalogue.songs.filter(s => s.hymn);  // the catalogue is already in name order
+const listSort = { hymns: 'number', psalms: 'week' };  // kept while the app is open, so it's still there coming back from a page
+// A numbered list with a sort bar. `sorts` is [key, label, compare]; no compare leaves the catalogue's name order.
+function showNumbered(tab, title, items, placeholder, sorts, row) {
+  document.title = title + ' – St. Francis de Sales';
   app.innerHTML = `
     <h1>St. Francis de Sales</h1>
-    ${tabs('hymns')}
-    ${searchBox(hymns, 'Search by number or name')}
-    <div class="sortbar">
-      <button type="button" data-sort="number">No.</button>
-      <button type="button" data-sort="name">Name</button>
-    </div>
+    ${tabs(tab)}
+    ${searchBox(items, placeholder)}
+    <div class="sortbar">${sorts.map(([key, label]) => `<button type="button" data-sort="${key}" data-label="${label}"></button>`).join('')}</div>
     <ul class="songs hymns"></ul>`;
   const filter = wireSearch();
   const buttons = app.querySelectorAll('.sortbar button');
   const draw = () => {
-    const sorted = hymnSort === 'number' ? [...hymns].sort((a, b) => a.hymn - b.hymn) : hymns;
-    app.querySelector('.songs').innerHTML = sorted.map(hymnRow).join('');
+    const compare = sorts.find(([key]) => key === listSort[tab])[2];
+    const sorted = compare ? [...items].sort(compare) : items;
+    app.querySelector('.songs').innerHTML = sorted.map(row).join('');
     buttons.forEach(b => {
-      const on = b.dataset.sort === hymnSort;
+      const on = b.dataset.sort === listSort[tab];
       b.setAttribute('aria-pressed', on);
-      b.textContent = b.textContent.replace(/ ▾$/, '') + (on ? ' ▾' : '');
+      b.textContent = b.dataset.label + (on ? ' ▾' : '');
     });
     filter();
   };
-  buttons.forEach(b => b.addEventListener('click', () => { hymnSort = b.dataset.sort; draw(); }));
+  buttons.forEach(b => b.addEventListener('click', () => { listSort[tab] = b.dataset.sort; draw(); }));
   draw();
+}
+function showHymns() {
+  showNumbered('hymns', 'Hymns', catalogue.songs.filter(s => s.hymn), 'Search by number or name',
+    [['number', 'No.', (a, b) => a.hymn - b.hymn], ['name', 'Name']], hymnRow);
+}
+function showPsalms() {
+  showNumbered('psalms', 'Psalms', catalogue.songs.filter(s => s.kind === 'psalm'), 'Search by week, number or words',
+    [['number', 'No.', (a, b) => (a.number || Infinity) - (b.number || Infinity) || a.order.localeCompare(b.order)],
+     ['week', 'Week', (a, b) => a.order.localeCompare(b.order)]], psalmRow);
 }
 function showProgrammes() {
   document.title = 'Programmes – St. Francis de Sales';
@@ -718,7 +764,7 @@ function showProgramme(p) {
 }
 
 function songNav(meta, prog) {
-  if (!prog) return { top: `<div class="crumb">${meta.hymn ? '<a href="#hymns">← Hymns</a>' : '<a href="#">← Choir</a>'}</div>`, bottom: '' };
+  if (!prog) return { top: `<div class="crumb">${meta.kind === 'psalm' ? '<a href="#psalms">← Psalms</a>' : meta.hymn ? '<a href="#hymns">← Hymns</a>' : '<a href="#">← Choir</a>'}</div>`, bottom: '' };
   const i = prog.songs.indexOf(meta.slug);
   const link = (slug, label) => {
     const s = catalogue.songs.find(x => x.slug === slug);
@@ -729,6 +775,21 @@ function songNav(meta, prog) {
     top: `<div class="crumb"><a href="#programme-${prog.slug}">← ${esc(prog.title)}</a><span>${i + 1} of ${prog.songs.length}</span></div>`,
     bottom: prevNext,
   };
+}
+
+const underlined = line => esc(line).replace(/\[([^\]]+)\]/g, '<u>$1</u>');
+const wordLines = lines => lines.map(l => `<div class="line">${underlined(l)}</div>`).join('');
+function psalmWords(song) {
+  const a = song.acclamation;
+  return `
+    <section class="words">
+      <h2>Verses</h2>
+      <ol>${song.verses.map(lines => `<li>${wordLines(lines)}</li>`).join('')}</ol>
+      ${a ? `
+        <h2>Gospel Acclamation <span class="ref">· ${esc(a.ref)}</span></h2>
+        ${a.note ? `<p class="see">${esc(a.note)}</p>` : ''}
+        ${wordLines(a.lines)}` : ''}
+    </section>`;
 }
 
 async function showSong(meta, prog) {
@@ -744,14 +805,15 @@ async function showSong(meta, prog) {
   }
   if (token !== routeToken) return;  // navigated away while loading
   const maxT = Math.max(90, Math.round(song.tempo * 1.4));
+  const excerpts = song.excerpts || [song], psalm = song.kind === 'psalm';
   app.innerHTML = `
     ${nav.top}
     <h1>${esc(song.title)}</h1>
-    <p class="sub">${esc(hymnLabel(meta) + byline(song))} · ${keyName(song.key)} · ♩ = ${song.tempo}<span id="transposed"></span></p>
+    <p class="sub">${esc(hymnLabel(meta) + (psalm ? song.ref + ' · ' : '') + byline(song))} · ${keyName(song.key)} · ♩ = ${song.tempo}<span id="transposed"></span></p>
     ${song.note ? `<p class="note">${esc(song.note)}</p>` : ''}
     <div class="controls">
       <div class="topbar">
-        <button id="play" type="button">▶ Play</button>
+        ${excerpts.map((e, i) => `<button data-play="${i}" data-label="${esc(psalm ? e.name : 'Play')}" type="button">▶ ${esc(psalm ? e.name : 'Play')}</button>`).join('')}
         <span class="startlabel" id="startlabel"></span>
         <button id="home" class="quiet" type="button" hidden>Start from beginning</button>
         <span id="playmsg" class="err" style="margin:0"></span>
@@ -772,7 +834,7 @@ async function showSong(meta, prog) {
           <label>Tempo <input id="tempo" type="range" min="30" max="${maxT}" value="${song.tempo}"> <span id="tval">${song.tempo}</span></label>
           <button id="tempo-reset" class="quiet" type="button" disabled>Reset</button>
           <label><input id="countin" type="checkbox"> Count-in</label>
-          <label ${song.tempo_marks.length ? '' : 'hidden'}><input id="expressive" type="checkbox"> Rit. &amp; pauses</label>
+          <label ${excerpts.some(e => e.tempo_marks.length) ? '' : 'hidden'}><input id="expressive" type="checkbox"> Rit. &amp; pauses</label>
           <span class="transpose" role="group" aria-label="Transpose in semitones">Transpose
             <button id="tr-down" class="quiet" type="button" aria-label="Down a semitone">−</button>
             <span id="trval" aria-live="polite"></span>
@@ -781,23 +843,30 @@ async function showSong(meta, prog) {
         </div>
       </div>
     </div>
-    <div class="score"></div>
+    ${excerpts.map(e => `${psalm ? `<h2 class="xhead">${esc(e.name)}</h2>` : ''}<div class="score${e.free ? ' free' : ''}"></div>`).join('')}
     <p class="foot">Tap a bar to start from there.</p>
+    ${psalm ? psalmWords(song) : ''}
     ${nav.bottom}`;
   const mix = loadMix(song), settings = loadSettings(song);
   const savedTranspose = Number.isInteger(settings.transpose) ? settings.transpose : 0;
-  P = { song, solo: null, transpose: Math.max(-TRANSPOSE_MAX, Math.min(TRANSPOSE_MAX, savedTranspose)), root: app.querySelector('.score'), mix, shown: shownFrom(mix), startBar: 0, layout: [], followed: null };
-  renderScore();
+  const roots = app.querySelectorAll('.score');
+  const scores = excerpts.map((e, i) => ({ song: e, root: roots[i], startBar: 0, layout: [], followed: null }));
+  P = { song, solo: null, transpose: Math.max(-TRANSPOSE_MAX, Math.min(TRANSPOSE_MAX, savedTranspose)), mix, shown: shownFrom(mix), scores };
+  S = scores[0];
+  renderScores();
 
-  document.getElementById('play').addEventListener('click', () => {
-    if (active || document.getElementById('play').classList.contains('playing')) return stopAll();
-    startAt(song.bars[P.startBar].start, document.getElementById('countin').checked);
-  });
-  document.getElementById('home').addEventListener('click', () => selectBar(0));
-  P.root.addEventListener('click', e => {
+  app.querySelectorAll('[data-play]').forEach(b => b.addEventListener('click', () => {
+    if (b.classList.contains('playing')) return stopAll();
+    const s = P.scores[+b.dataset.play];
+    selectScore(s);
+    drawSelection();
+    startAt(s.song.bars[s.startBar].start, document.getElementById('countin').checked);
+  }));
+  document.getElementById('home').addEventListener('click', () => selectBar(S, 0));
+  scores.forEach(s => s.root.addEventListener('click', e => {
     const bar = e.target.dataset && e.target.dataset.bar;
-    if (bar !== undefined) selectBar(+bar);
-  });
+    if (bar !== undefined) selectBar(s, +bar);
+  }));
   const showLevels = () => {
     app.querySelectorAll('.seg button').forEach(b => {
       b.classList.toggle('on', P.mix[b.dataset.part].level === b.dataset.level);
@@ -815,7 +884,7 @@ async function showSong(meta, prog) {
     P.mix[part].level = level;
     saveMix();
     showLevels();
-    if (active) active.gains[part].gain.setTargetAtTime(LEVELS[level], active.ac.currentTime, 0.01);
+    if (active && active.gains[part]) active.gains[part].gain.setTargetAtTime(LEVELS[level], active.ac.currentTime, 0.01);
   }));
   // Solo lasts until it's turned off or the song is left; it isn't saved.
   app.querySelectorAll('.solo').forEach(b => b.addEventListener('click', () => {
@@ -829,7 +898,7 @@ async function showSong(meta, prog) {
       P.mix[box.dataset.show].show = box.checked;
       saveMix();
       P.shown = shownFrom(P.mix);
-      renderScore();
+      renderScores();
       startTiming();
     });
   });
@@ -889,10 +958,12 @@ function route() {
   routeToken++;
   stopAll();
   P = null;
+  S = null;
   const hash = location.hash.replace(/^#/, '');
   let m;
   if (hash === 'programmes') showProgrammes();
   else if (hash === 'hymns') showHymns();
+  else if (hash === 'psalms') showPsalms();
   else if ((m = /^programme-(.+)$/.exec(hash)) && catalogue.programmes.find(p => p.slug === m[1])) showProgramme(catalogue.programmes.find(p => p.slug === m[1]));
   else if ((m = /^song-([^/]+)(?:\/(.+))?$/.exec(hash)) && catalogue.songs.find(s => s.slug === m[1])) {
     const prog = catalogue.programmes.find(p => p.slug === m[2] && p.songs.includes(m[1]));
