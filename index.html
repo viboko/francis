@@ -33,8 +33,8 @@
   .login button { width:100%; }
 
   /* lists */
-  nav.tabs { display:flex; gap:clamp(10px, 3.6vw, 20px); font-family:var(--sans); font-size:.95rem; border-bottom:1px solid var(--line); margin-bottom:14px; }
-  nav.tabs a { padding:8px 2px; text-decoration:none; color:var(--muted); border-bottom:2px solid transparent; margin-bottom:-1px; }
+  nav.tabs { display:flex; gap:clamp(5px, 1.8vw, 20px); font-family:var(--sans); font-size:clamp(.8rem, 3.6vw, .95rem); overflow-x:auto; scrollbar-width:none; border-bottom:1px solid var(--line); margin-bottom:14px; }
+  nav.tabs a { padding:8px 2px; white-space:nowrap; text-decoration:none; color:var(--muted); border-bottom:2px solid transparent; margin-bottom:-1px; }
   nav.tabs a.on { color:var(--ink); border-color:var(--accent); }
   .search { width:100%; font:inherit; font-family:var(--sans); padding:9px 12px; border:1px solid var(--line); border-radius:8px; background:#fff; margin-bottom:6px; }
   .songs { list-style:none; padding:0; margin:0; }
@@ -661,9 +661,11 @@ const shownFrom = mix => new Set(Object.keys(mix).filter(id => mix[id].show));
 /* ---------- views ---------- */
 const tabs = on => `
   <nav class="tabs">
-    <a href="#" class="${on === 'choir' ? 'on' : ''}">Choir</a>
+    <a href="#" class="${on === 'all' ? 'on' : ''}">All</a>
+    <a href="#choir" class="${on === 'choir' ? 'on' : ''}">Choir</a>
     <a href="#hymns" class="${on === 'hymns' ? 'on' : ''}">Hymns</a>
     <a href="#psalms" class="${on === 'psalms' ? 'on' : ''}">Psalms</a>
+    <a href="#mass" class="${on === 'mass' ? 'on' : ''}">Mass</a>
     <a href="#carols" class="${on === 'carols' ? 'on' : ''}">Carols</a>
     <a href="#programmes" class="${on === 'prog' ? 'on' : ''}">Programmes</a>
   </nav>`;
@@ -685,12 +687,17 @@ const carolRow = s => `
     <span class="no">${carolNo(s)}</span>
     <div><div class="t">${esc(s.title)}</div><div class="m">${esc(byline(s))}</div></div>
   </a></li>`;
+const massRow = s => `
+  <li data-q="${songQuery(s)}"><a href="#song-${s.slug}">
+    <span class="no">${s.mass}</span>
+    <div><div class="t">${esc(s.title)}</div><div class="m">${esc(byline(s))}</div></div>
+  </a></li>`;
 const psalmRow = s => `
   <li data-q="${songQuery(s)}"><a href="#song-${s.slug}">
     <span class="no">${s.number || ''}</span>
     <div><div class="t">${esc(s.title)}</div><div class="m">${esc(s.response_words)}</div></div>
   </a></li>`;
-const searchBox = (songs, label) => songs.length >= SEARCH_MIN ? `<input class="search" type="search" placeholder="${label}" aria-label="${label}">` : '';
+const searchBox = (songs, label) => label && songs.length >= SEARCH_MIN ? `<input class="search" type="search" placeholder="${label}" aria-label="${label}">` : '';
 // A programme's time and day, as the choir says them: 5:30pm Saturday 7th November 2026.
 const programmeWhen = p => {
   const [hour, minute] = p.time.split(':');
@@ -711,17 +718,29 @@ function wireSearch() {
   if (search) search.addEventListener('input', apply);
   return apply;
 }
-function showChoir() {
+let lastList = 'all';  // the list a song was opened from, for its ← link
+const listNames = { all: 'All', choir: 'Choir', hymns: 'Hymns', psalms: 'Psalms', mass: 'Mass', carols: 'Carols' };
+// Which list a song belongs to, when it wasn't opened from a list (a bookmark, or a programme).
+const listOf = s => s.kind === 'psalm' ? 'psalms' : s.hymn ? 'hymns' : s.carol ? 'carols' : s.mass ? 'mass' : 'choir';
+function showAll() {
   document.title = 'St. Francis de Sales';
-  const songs = catalogue.songs.filter(s => !s.hymn && !s.carol && s.kind !== 'psalm');
+  const songs = catalogue.songs;
   app.innerHTML = `
     <h1>St. Francis de Sales</h1>
-    ${tabs('choir')}
-    ${searchBox(songs, 'Search songs')}
+    ${tabs('all')}
+    ${searchBox(songs, 'Search everything')}
     <ul class="songs">${songs.map(s => songRow(s)).join('')}</ul>`;
   wireSearch();
 }
-const listSort = { hymns: 'number', carols: 'number', psalms: 'week' };  // kept while the app is open, so it's still there coming back from a page
+function showChoir() {
+  document.title = 'Choir – St. Francis de Sales';
+  const songs = catalogue.songs.filter(s => listOf(s) === 'choir');
+  app.innerHTML = `
+    <h1>St. Francis de Sales</h1>
+    ${tabs('choir')}
+    <ul class="songs">${songs.map(s => songRow(s)).join('')}</ul>`;
+}
+const listSort = { hymns: 'number', carols: 'number', psalms: 'week', mass: 'order' };  // kept while the app is open, so it's still there coming back from a page
 // A numbered list with a sort bar. `sorts` is [key, label, compare]; no compare leaves the catalogue's name order.
 function showNumbered(tab, title, items, placeholder, sorts, row) {
   document.title = title + ' – St. Francis de Sales';
@@ -752,8 +771,12 @@ function showHymns() {
     [['number', 'No.', (a, b) => a.hymn - b.hymn], ['name', 'Name']], hymnRow);
 }
 function showCarols() {
-  showNumbered('carols', 'Carols', catalogue.songs.filter(s => s.carol), 'Search by number or name',
+  showNumbered('carols', 'Carols', catalogue.songs.filter(s => s.carol), null,
     [['number', 'No.', (a, b) => a.carol - b.carol], ['name', 'Name']], carolRow);
+}
+function showMass() {
+  showNumbered('mass', 'Mass', catalogue.songs.filter(s => s.mass), null,
+    [['order', 'Order', (a, b) => a.mass - b.mass], ['name', 'Name']], massRow);
 }
 function showPsalms() {
   showNumbered('psalms', 'Psalms', catalogue.songs.filter(s => s.kind === 'psalm'), 'Search by week, number or words',
@@ -785,7 +808,7 @@ function showProgramme(p) {
 }
 
 function songNav(meta, prog) {
-  if (!prog) return { top: `<div class="crumb">${meta.kind === 'psalm' ? '<a href="#psalms">← Psalms</a>' : meta.hymn ? '<a href="#hymns">← Hymns</a>' : meta.carol ? '<a href="#carols">← Carols</a>' : '<a href="#">← Choir</a>'}</div>`, bottom: '' };
+  if (!prog) return { top: `<div class="crumb"><a href="#${lastList === 'all' ? '' : lastList}">← ${listNames[lastList]}</a></div>`, bottom: '' };
   const i = prog.songs.indexOf(meta.slug);
   const link = (slug, label) => {
     const s = catalogue.songs.find(x => x.slug === slug);
@@ -982,15 +1005,16 @@ function route() {
   S = null;
   const hash = location.hash.replace(/^#/, '');
   let m;
+  const lists = { choir: showChoir, hymns: showHymns, psalms: showPsalms, mass: showMass, carols: showCarols };
   if (hash === 'programmes') showProgrammes();
-  else if (hash === 'hymns') showHymns();
-  else if (hash === 'carols') showCarols();
-  else if (hash === 'psalms') showPsalms();
+  else if (lists[hash]) { lastList = hash; lists[hash](); }
   else if ((m = /^programme-(.+)$/.exec(hash)) && catalogue.programmes.find(p => p.slug === m[1])) showProgramme(catalogue.programmes.find(p => p.slug === m[1]));
   else if ((m = /^song-([^/]+)(?:\/(.+))?$/.exec(hash)) && catalogue.songs.find(s => s.slug === m[1])) {
     const prog = catalogue.programmes.find(p => p.slug === m[2] && p.songs.includes(m[1]));
-    showSong(catalogue.songs.find(s => s.slug === m[1]), prog);
-  } else showChoir();
+    const song = catalogue.songs.find(s => s.slug === m[1]);
+    if (lastList !== 'all' && lastList !== listOf(song)) lastList = listOf(song);
+    showSong(song, prog);
+  } else { lastList = 'all'; showAll(); }
   window.scrollTo(0, 0);
 }
 window.addEventListener('hashchange', () => { if (catalogue) route(); });
