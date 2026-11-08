@@ -836,6 +836,13 @@ function psalmWords(song) {
     </section>`;
 }
 
+// "Words only": the later verses as printed below the music, numbered from 2.
+const laterVerses = wo => `
+    <section class="words" id="later-verses" hidden>
+      <h2>Verses</h2>
+      <ol start="2">${wo.verses.map(lines => `<li>${wordLines(lines)}</li>`).join('')}</ol>
+    </section>`;
+
 async function showSong(meta, prog) {
   const token = routeToken;
   document.title = meta.title + ' – St. Francis de Sales';
@@ -879,6 +886,7 @@ async function showSong(meta, prog) {
           <button id="tempo-reset" class="quiet" type="button" disabled>Reset</button>
           <label><input id="countin" type="checkbox"> Count-in</label>
           <label ${excerpts.some(e => e.tempo_marks.length) ? '' : 'hidden'}><input id="expressive" type="checkbox"> Rit. &amp; pauses</label>
+          <label ${song.words_only ? '' : 'hidden'}><input id="wordsonly" type="checkbox"> Words only</label>
           <span class="transpose" role="group" aria-label="Transpose in semitones">Transpose
             <button id="tr-down" class="quiet" type="button" aria-label="Down a semitone">−</button>
             <span id="trval" aria-live="polite"></span>
@@ -890,6 +898,7 @@ async function showSong(meta, prog) {
     ${excerpts.map(e => `${psalm ? `<h2 class="xhead">${esc(e.name)}</h2>` : ''}<div class="score${e.free ? ' free' : ''}"></div>`).join('')}
     <p class="foot">Tap a bar to start from there.</p>
     ${psalm ? psalmWords(song) : ''}
+    ${song.words_only ? laterVerses(song.words_only) : ''}
     ${nav.bottom}`;
   const mix = loadMix(song), settings = loadSettings(song);
   const savedTranspose = Number.isInteger(settings.transpose) ? settings.transpose : 0;
@@ -897,6 +906,23 @@ async function showSong(meta, prog) {
   const scores = excerpts.map((e, i) => ({ song: e, root: roots[i], startBar: 0, layout: [], followed: null }));
   P = { song, solo: null, transpose: Math.max(-TRANSPOSE_MAX, Math.min(TRANSPOSE_MAX, savedTranspose)), mix, shown: shownFrom(mix), scores };
   S = scores[0];
+  // Words only swaps in the music as printed, up to the end of the first verse; remembered per song.
+  const wordsOnly = document.getElementById('wordsonly');
+  const setWordsOnly = on => {
+    scores[0].song = on ? { ...song, ...song.words_only } : song;
+    document.getElementById('later-verses').hidden = !on;
+  };
+  if (song.words_only) {
+    wordsOnly.checked = settings.words_only === true;
+    setWordsOnly(wordsOnly.checked);
+    wordsOnly.addEventListener('change', () => {
+      stopAll();
+      saveSettings({ words_only: wordsOnly.checked });
+      setWordsOnly(wordsOnly.checked);
+      if (scores[0].startBar >= scores[0].song.bars.length) scores[0].startBar = 0;
+      renderScores();
+    });
+  }
   renderScores();
 
   app.querySelectorAll('[data-play]').forEach(b => b.addEventListener('click', () => {
