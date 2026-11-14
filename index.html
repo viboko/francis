@@ -662,7 +662,7 @@ const shownFrom = mix => new Set(Object.keys(mix).filter(id => mix[id].show));
 /* ---------- views ---------- */
 const tabs = on => `
   <nav class="tabs">
-    <a href="#" class="${on === 'all' ? 'on' : ''}">All</a>
+    <a href="#" class="${on === 'all' ? 'on' : ''}">All (${catalogue.songs.length})</a>
     <a href="#choir" class="${on === 'choir' ? 'on' : ''}">Choir</a>
     <a href="#hymns" class="${on === 'hymns' ? 'on' : ''}">Hymns</a>
     <a href="#psalms" class="${on === 'psalms' ? 'on' : ''}">Psalms</a>
@@ -671,8 +671,9 @@ const tabs = on => `
     <a href="#programmes" class="${on === 'prog' ? 'on' : ''}">Programmes</a>
   </nav>`;
 const carolNo = s => `C${s.carol}`;
-const hymnLabel = s => s.hymn ? `Hymn ${s.hymn} · ` : s.carol ? `Carol ${carolNo(s)} · ` : s.number ? `No. ${s.number} · ` : '';
-const songQuery = s => esc([s.title, s.composer, s.words, s.hymn, s.carol && carolNo(s), s.number, s.ref, s.response_words].filter(Boolean).join(' ').toLowerCase());
+const anthemNo = s => s.anthem ? `A${s.anthem}` : '';
+const hymnLabel = s => s.hymn ? `Hymn ${s.hymn} · ` : s.carol ? `Carol ${carolNo(s)} · ` : s.anthem ? `Anthem ${anthemNo(s)} · ` : s.number ? `No. ${s.number} · ` : '';
+const songQuery = s => esc([s.title, s.composer, s.words, s.hymn, s.carol && carolNo(s), anthemNo(s), s.number, s.ref, s.response_words].filter(Boolean).join(' ').toLowerCase());
 const songMeta = s => s.kind === 'psalm' ? 'Psalm · ' + hymnLabel(s) + s.response_words : hymnLabel(s) + byline(s);
 const songRow = (s, prog, part) => `
   <li data-q="${songQuery(s)}"><a href="#song-${s.slug}${prog ? '/' + prog.slug : ''}">
@@ -686,6 +687,11 @@ const hymnRow = s => `
 const carolRow = s => `
   <li data-q="${songQuery(s)}"><a href="#song-${s.slug}">
     <span class="no">${carolNo(s)}</span>
+    <div><div class="t">${esc(s.title)}</div><div class="m">${esc(byline(s))}</div></div>
+  </a></li>`;
+const anthemRow = s => `
+  <li data-q="${songQuery(s)}"><a href="#song-${s.slug}">
+    <span class="no">${anthemNo(s)}</span>
     <div><div class="t">${esc(s.title)}</div><div class="m">${esc(byline(s))}</div></div>
   </a></li>`;
 const massRow = s => `
@@ -733,15 +739,7 @@ function showAll() {
     <ul class="songs">${songs.map(s => songRow(s)).join('')}</ul>`;
   wireSearch();
 }
-function showChoir() {
-  document.title = 'Choir – St. Francis de Sales';
-  const songs = catalogue.songs.filter(s => listOf(s) === 'choir');
-  app.innerHTML = `
-    <h1>St. Francis de Sales</h1>
-    ${tabs('choir')}
-    <ul class="songs">${songs.map(s => songRow(s)).join('')}</ul>`;
-}
-const listSort = { hymns: 'number', carols: 'number', psalms: 'week', mass: 'order' };  // kept while the app is open, so it's still there coming back from a page
+const listSort = { choir: 'number', hymns: 'number', carols: 'number', psalms: 'week', mass: 'order' };  // kept while the app is open, so it's still there coming back from a page
 // A numbered list with a sort bar. `sorts` is [key, label, compare]; no compare leaves the catalogue's name order.
 function showNumbered(tab, title, items, placeholder, sorts, row) {
   document.title = title + ' – St. Francis de Sales';
@@ -767,8 +765,13 @@ function showNumbered(tab, title, items, placeholder, sorts, row) {
   buttons.forEach(b => b.addEventListener('click', () => { listSort[tab] = b.dataset.sort; draw(); }));
   draw();
 }
+// Choir songs from the anthem book first, by number (A2, A6, A31 ...), then the rest by name.
+function showChoir() {
+  showNumbered('choir', 'Choir', catalogue.songs.filter(s => listOf(s) === 'choir'), null,
+    [['number', 'No.', (a, b) => (a.anthem || Infinity) - (b.anthem || Infinity) || a.title.localeCompare(b.title)], ['name', 'Name']], anthemRow);
+}
 function showHymns() {
-  showNumbered('hymns', 'Hymns', catalogue.songs.filter(s => s.hymn), 'Search by number or name',
+  showNumbered('hymns', 'Hymns', catalogue.songs.filter(s => s.hymn), null,
     [['number', 'No.', (a, b) => a.hymn - b.hymn], ['name', 'Name']], hymnRow);
 }
 function showCarols() {
